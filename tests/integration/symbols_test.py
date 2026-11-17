@@ -33,7 +33,9 @@ with tempfile.TemporaryDirectory(prefix='sinan-symbols-') as temp:
     invalid.write_bytes(b'not a valid Microsoft PDB')
     p = subprocess.run([str(worker), '--module', 'ui', '--offline', '--cache-dir', str(cache), '--pdb', str(invalid)], capture_output=True, encoding='utf-8', timeout=25)
     assert p.returncode == 5 and json.loads(p.stdout)['prepared'] is False
+    assert 'MSF 7.00 header' in json.loads(p.stdout)['error'], p.stdout
     assert not list(cache.glob('*/profile.json'))
-    assert not list(cache.glob('*/stage-*'))
+    leftovers = list(cache.glob('*/stage-*'))
+    assert not leftovers, [(str(p), [str(c.relative_to(p)) for c in p.rglob('*')]) for p in leftovers]
     assert not data.exists()
 print('Isolated three-module status, offline failures and staged PDB cleanup passed')

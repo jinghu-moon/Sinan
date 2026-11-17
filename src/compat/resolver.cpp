@@ -6,6 +6,7 @@
 #include <winhttp.h>
 #include <array>
 #include <cstring>
+#include <fstream>
 
 namespace sinan::compat {
 namespace {
@@ -61,14 +62,23 @@ Json resolve_module(const fs::path& cache,bool offline,bool force,Module target,
     }
     auto pdb=directory/wide(image.pdb_name);
     // Stage PDB in an isolated directory so DbgHelp cannot silently select another file.
-    auto staging=directory/(L"stage-"+std::to_wstring(GetCurrentProcessId()));fs::create_directories(staging);
-    struct Cleanup{fs::path path,pdb;~Cleanup(){std::error_code ec;fs::remove(pdb,ec);fs::remove(path,ec);}} cleanup{staging,staging/wide(image.pdb_name)};
+    auto staging=directory/(L"stage-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(GetTickCount64()));
+    if(!fs::create_directory(staging))throw Error(5,"Cannot create a private symbol staging directory");
+    // DbgHelp can create search-cache children, especially for invalid input.
+    // Own the entire newly created staging tree, not just the expected PDB.
+    // Never recursively clean the shared module/cache directory.
+    struct Cleanup{fs::path path;~Cleanup(){std::error_code ec;fs::remove_all(path,ec);}} cleanup{staging};
     auto expected_pdb=fs::path(wide(module_name(target))).replace_extension(L".pdb");
     if(_wcsicmp(wide(image.pdb_name).c_str(),expected_pdb.c_str()))throw Error(3,"Unexpected module PDB name");
     auto staged=staging/wide(image.pdb_name);
     if(!local_pdb.empty()||((offline||!force)&&fs::is_regular_file(pdb))){
         auto source=local_pdb.empty()?pdb:local_pdb;
         if(!fs::is_regular_file(source)||fs::file_size(source)>128*1024*1024)throw Error(5,"Offline PDB missing or larger than 128 MiB");
+        {
+            std::ifstream input(source,std::ios::binary);std::array<char,32> header{};
+            if(!input.read(header.data(),header.size())||!std::string_view(header.data(),header.size()).starts_with("Microsoft C/C++ MSF 7.00\r\n"))
+                throw Error(5,"Offline PDB does not have an MSF 7.00 header");
+        }
         fs::copy_file(source,staged,fs::copy_options::overwrite_existing);
     }else{if(offline)throw Error(5,"Offline PDB is missing; use sinan-symbols --pdb <file> or retry without --offline");network=true;atomic_write(staged,download(image));}
     Rvas rvas;Json missing=Json::array();
