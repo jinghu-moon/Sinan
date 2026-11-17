@@ -1,0 +1,138 @@
+#include "installer/install.hpp"
+#include "agent/runtime.hpp"
+#include "installer/startup.hpp"
+#include <vector>
+
+namespace tabtail {
+namespace {
+Json load_state(const fs::path& root) {
+    auto p = root / L"install-state.json";
+    if (!fs::exists(p)) return {{"schema_version", 1}, {"path_owned", false}};
+    auto state = Json::parse(read_file(p));
+    if (!state.is_object() || state.value("schema_version", 0) != 1 || !state.contains("path_owned") || !state["path_owned"].is_boolean())
+        throw Error(2, "install-state.json 无效");
+    return state;
+}
+void save_state(const fs::path& root, const Json& state) { atomic_write(root / L"install-state.json", state.dump(2) + "\n"); }
+Json manage_path_locked(const fs::path& root, bool add) {
+    auto bin = root / L"bin";
+    if (add && !fs::is_regular_file(bin / L"tabtail.exe")) throw Error(1, "尚未安装，请先执行 tabtail install");
+    auto state = load_state(root);
+    bool owned = state.value("path_owned", false);
+    PathChange result;
+    if (add || owned) result = change_user_path(bin.wstring(), add);
+    if (result.changed) {
+        // The ownership record is needed for a conservative uninstall.
+        state["path_owned"] = add;
+        save_state(root, state);
+    } else if (!add && owned) {
+        state["path_owned"] = false; save_state(root, state);
+    }
+    return {{"changed", result.changed}, {"notified", result.notified}, {"path", utf8(bin.wstring())},
+        {"message", add ? "PATH 已登记；请完全退出并重新启动终端应用。" : "已移除本工具登记的 PATH 项；其他条目保留。"}};
+}
+}
+Json path_status(const fs::path& root) {
+    auto bin = root / L"bin";
+    auto state = load_state(root);
+    return {{"user_path_registered", path_contains(registry_read(L"Environment", L"Path").text, bin.wstring())},
+        {"current_process_has_entry", path_contains(env(L"PATH"), bin.wstring())}, {"owned", state.value("path_owned", false)},
+        {"bin", utf8(bin.wstring())}};
+}
+Json manage_path(const fs::path& root, bool add) {
+    FileLock lock(root / L"install.lock");
+    return manage_path_locked(root, add);
+}
+Json install(const fs::path& root) {
+    FileLock lock(root / L"install.lock");
+    auto source = executable_path();
+    auto dest = root / L"bin" / L"tabtail.exe";
+    auto source_dll = source.parent_path() / L"tabtail-hook.dll";
+    if (!fs::is_regular_file(source_dll)) throw Error(1, "分发目录缺少 tabtail-hook.dll；请保留 EXE 与 DLL 配套文件");
+    auto source_layout=source.parent_path()/L"tabtail-layout.dll";
+    if(!fs::is_regular_file(source_layout))throw Error(1,"分发目录缺少 tabtail-layout.dll");
+    for(auto name:{L"tabtail-features.dll",L"tabtail-style-0.7.dll",L"tabtail-login.exe",L"tabtail-symbols.exe"})if(!fs::is_regular_file(source.parent_path()/name))throw Error(1,"Distribution is missing "+utf8(name));
+    fs::create_directories(dest.parent_path());
+    if (!fs::equivalent(source.parent_path(), dest.parent_path())) {
+        // Check the whole binary pair before copying either file.
+        for (const auto& name : {L"tabtail.exe", L"tabtail-hook.dll", L"tabtail-layout.dll",L"tabtail-features.dll",L"tabtail-style-0.7.dll",L"tabtail-login.exe",L"tabtail-symbols.exe"}) {
+            auto from = source.parent_path() / name, to = dest.parent_path() / name;
+            if (fs::exists(to) && read_file(from) != read_file(to))
+                throw Error(1, "已安装其他版本；请先从分发目录卸载旧版本，清理被 Explorer 占用的 DLL 后重试。");
+        }
+        if (fs::exists(dest)) {
+            if (read_file(source) != read_file(dest))
+                throw Error(1, "已安装其他版本；此版本暂不支持覆盖升级，请先从分发目录卸载旧版本。");
+        } else fs::copy_file(source, dest);
+        auto dll_dest = dest.parent_path() / L"tabtail-hook.dll";
+        if (!fs::exists(dll_dest)) fs::copy_file(source_dll, dll_dest);
+        auto layout_dest=dest.parent_path()/L"tabtail-layout.dll";
+        if(!fs::exists(layout_dest))fs::copy_file(source_layout,layout_dest);
+        for(auto name:{L"tabtail-features.dll",L"tabtail-style-0.7.dll",L"tabtail-login.exe",L"tabtail-symbols.exe"})if(!fs::exists(dest.parent_path()/name))fs::copy_file(source.parent_path()/name,dest.parent_path()/name);
+    }
+    // CPack places README and licenses next to bin/. A build-tree install may have neither.
+    auto package = source.parent_path().filename() == L"bin" ? source.parent_path().parent_path() : source.parent_path();
+    for (const auto& name : {L"README.md", L"LICENSE"}) {
+        auto from = package / name, to = root / name;
+        if (fs::is_regular_file(from) && !fs::equivalent(from.parent_path(), to.parent_path())) fs::copy_file(from, to, fs::copy_options::overwrite_existing);
+    }
+    if (fs::is_directory(package / L"licenses") && !fs::equivalent(package, root))
+        fs::copy(package / L"licenses", root / L"licenses", fs::copy_options::recursive | fs::copy_options::overwrite_existing);
+    if (fs::is_directory(package / L"docs") && !fs::equivalent(package, root)) {
+        fs::create_directories(root / L"docs");
+        for (const auto& name : {L"design.md", L"implementation.md", L"testing-v0.5.md", L"tab-width.md",L"01-tab-protection-and-appearance.md",L"testing-tab-features.md",L"05-symbol-compatibility.md",L"testing-v0.10.0.md"}) {
+            if (fs::is_regular_file(package / L"docs" / name))
+                fs::copy_file(package / L"docs" / name, root / L"docs" / name, fs::copy_options::overwrite_existing);
+        }
+    }
+    if(!fs::equivalent(package,root))for(auto relative:{L"docs/evidence/01-native-probe.json",L"docs/evidence/02-tab-icon-fix.json",L"docs/evidence/02-tab-icon-user-confirmed.png",L"docs/research/02-shelltabs-tab-icons.md",L"assets/icons/pin-rounded.svg",L"assets/icons/lock-rounded.svg",L"tools/update-agent.ps1",
+        L"docs/evidence/04-symbol-resolution.json",L"docs/evidence/05-symbol-compatibility.json",L"docs/research/03-explorertabutility-compatibility.md",L"docs/research/04-explorerpatcher-symbol-compatibility.md"}) {
+        auto from=package/relative,to=root/relative;if(fs::is_regular_file(from)){fs::create_directories(to.parent_path());fs::copy_file(from,to,fs::copy_options::overwrite_existing);}
+    }
+    ConfigStore store(root);
+    if (!fs::exists(store.path())) store.update([](Config&) {});
+    else store.load();
+    if(store.load().features.at("restore").at("automatic").get<bool>())manage_restore_startup(root,true,dest);
+    auto state = load_state(root); state["version"] = TABTAIL_VERSION; state["installed"] = true; save_state(root, state);
+    auto result = manage_path_locked(root, true);
+    result["installed"] = true; result["executable"] = utf8(dest.wstring());
+    result["message"] = "TabTail 已安装并登记 PATH；请完全退出并重新启动终端应用，执行 doctor 检查适配后使用 start。";
+    return result;
+}
+Json uninstall(const fs::path& root, bool purge) {
+    FileLock lock(root / L"install.lock");
+    stop_observer_agent(root);
+    auto result = manage_path_locked(root, false);
+    manage_restore_startup(root,false); // Removes only the exact command recorded as ours.
+    std::vector<std::string> pending;
+    std::error_code ec;
+    for (const auto& name : {L"tabtail.exe", L"tabtail-hook.dll", L"tabtail-layout.dll",L"tabtail-features.dll",L"tabtail-style-0.7.dll",L"tabtail-login.exe",L"tabtail-symbols.exe"}) {
+        auto file = root / L"bin" / name; ec.clear();
+        if (fs::exists(file) && !fs::remove(file, ec)) pending.push_back(utf8(file.wstring()));
+    }
+    for (const auto& file : {L"README.md", L"LICENSE", L"docs\\design.md", L"docs\\implementation.md", L"docs\\testing-v0.5.md", L"docs\\tab-width.md",L"docs\\01-tab-protection-and-appearance.md",L"docs\\testing-tab-features.md",
+        L"docs/evidence/01-native-probe.json",L"assets/icons/pin-rounded.svg",L"assets/icons/lock-rounded.svg",L"tools/update-agent.ps1",
+        L"docs/evidence/02-tab-icon-fix.json",L"docs/evidence/02-tab-icon-user-confirmed.png",L"docs/research/02-shelltabs-tab-icons.md",
+        L"docs/05-symbol-compatibility.md",L"docs/testing-v0.10.0.md",L"docs/evidence/04-symbol-resolution.json",L"docs/evidence/05-symbol-compatibility.json",L"docs/research/03-explorertabutility-compatibility.md",L"docs/research/04-explorerpatcher-symbol-compatibility.md",
+        L"licenses\\CLI11-LICENSE", L"licenses\\tomlplusplus-LICENSE", L"licenses\\json-LICENSE", L"licenses\\MinHook-LICENSE", L"licenses\\FTXUI-LICENSE"}) {
+        ec.clear(); auto p = root / file;
+        fs::remove(p, ec);
+        if (ec) pending.push_back(utf8(p.wstring()));
+    }
+    auto state = load_state(root); state["installed"] = false; state["pending_delete"] = pending; save_state(root, state);
+    if (purge) {
+        if (pending.empty()) {
+            // Only remove files owned by this version; never recursively delete the root.
+            for (const auto& file : {L"tabtail.toml", L"config.lock", L"install-state.json", L"README.md", L"LICENSE",L"workspace.json",L"workspace.lock",L"startup.lock",L"tabtail.pre-schema3.toml"}) {
+                ec.clear(); auto p = root / file; fs::remove(p, ec);
+                if (ec) pending.push_back(utf8(p.wstring()));
+            }
+        } else result["purge_deferred"] = true;
+    }
+    result["pending_delete"] = pending;
+    result["complete"] = pending.empty();
+    result["message"] = pending.empty() ? "TabTail 已卸载；默认保留配置。" : "PATH 已移除，文件仍被占用；标题 DLL 在 Explorer 退出前保持加载。请退出占用进程后，从解压目录再次执行 uninstall 完成清理。";
+    if (purge && pending.empty()) result["message"] = "TabTail 已卸载，配置已清理。";
+    return result;
+}
+}

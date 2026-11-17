@@ -1,0 +1,147 @@
+{
+  "version": "0.11.0",
+  "date": "2026-11-18",
+  "scope": "Read-only local PE/PDB validation and isolated tests; no Explorer injection or user agent changes",
+  "reference": "refer/ExplorerPatcher-master: dllmain.c TryToFindExplorerOffsets; TwinUIPatches.cpp vtable/reference/offset patterns; independent MIT implementation, no GPL source copied",
+  "symbol_count": 29,
+  "modules": {
+    "ExplorerFrame.dll": {
+      "image": {
+        "image_size": 3039232,
+        "machine": 34404,
+        "pdb_age": 1,
+        "pdb_guid": "{E183F37E-71AB-7E36-957E-E0D4E284FC46}",
+        "pdb_key": "E183F37E71AB7E36957EE0D4E284FC461",
+        "pdb_name": "ExplorerFrame.pdb",
+        "sha256": "4e28d2076608df5525ec1b7b2ed8dc0e866f43bf2ded6a5e4213ccd1c2284cbe",
+        "timestamp": 3210197039
+      },
+      "rvas": {
+        "actions_vtable": 2412176,
+        "add": 1695936,
+        "add_index": 1695984,
+        "browser_ctor": 1272560,
+        "browser_interface": 2359104,
+        "browser_vtable": 2358392,
+        "close": 1203620,
+        "frame_ctor": 1687004,
+        "frame_vtable": 2413280,
+        "get_browser": 354256,
+        "host_ctor": 618520,
+        "host_interface": 2365528,
+        "host_vtable": 2365784,
+        "host_window": 1210848,
+        "host_window_interface": 2365872,
+        "location": 946240,
+        "move_selected": 1723372,
+        "navigate": 1276680,
+        "remove": 1731552,
+        "reorder_iid": 2553312,
+        "reorder_service": 2553328,
+        "select": 1255792,
+        "tab_lookup": 742888,
+        "title": 273600
+      },
+      "fields": {
+        "actions": 232,
+        "active_guid": 792,
+        "browser_interface": 16,
+        "reorder_method": 5,
+        "reorder_provider": 688
+      },
+      "missing_symbols": [],
+      "failures": {},
+      "prepared": true,
+      "reused": true,
+      "network_used": false
+    },
+    "FileExplorerExtensions.dll": {
+      "image": {
+        "image_size": 6078464,
+        "machine": 34404,
+        "pdb_age": 1,
+        "pdb_guid": "{2E4A0255-7B9B-4908-917A-DF0E377B9327}",
+        "pdb_key": "2E4A02557B9B4908917ADF0E377B93271",
+        "pdb_name": "FileExplorerExtensions.pdb",
+        "sha256": "abdab68ac72b9b45dbf2001e81232041c78cac4f33ea37db445e43df4919c6a3",
+        "timestamp": 1775526810
+      },
+      "rvas": {
+        "view_get": 975408,
+        "view_vtable": 4973840
+      },
+      "fields": {
+        "view_get_slot": 12
+      },
+      "missing_symbols": [],
+      "failures": {},
+      "prepared": true,
+      "reused": true,
+      "network_used": false
+    },
+    "Windows.UI.FileExplorer.dll": {
+      "image": {
+        "image_size": 1642496,
+        "machine": 34404,
+        "pdb_age": 1,
+        "pdb_guid": "{A1C18AAB-53A1-B667-E536-113BED5F54AA}",
+        "pdb_key": "A1C18AAB53A1B667E536113BED5F54AA1",
+        "pdb_name": "windows.ui.fileexplorer.pdb",
+        "sha256": "6753a3b5d1d25564eab5a4e785ce481d03cac83b25606f3c2305a1b4cdbb10ac",
+        "timestamp": 3330148133
+      },
+      "rvas": {
+        "move_tab": 1054192,
+        "tab_ctor": 415036,
+        "tab_vtable": 1314136
+      },
+      "fields": {
+        "tab_guid": 120
+      },
+      "missing_symbols": [],
+      "failures": {},
+      "prepared": true,
+      "reused": true,
+      "network_used": false
+    }
+  },
+  "validation": {
+    "ctest_suites_passed": 20,
+    "ctest_suites_failed": 0,
+    "compatibility_checks_local": 63,
+    "tui_component_checks": 1747,
+    "three_module_offline_reuse": true,
+    "partial_modules_preserved": true,
+    "v010_manifest_upgraded_offline": true,
+    "no_network": true,
+    "no_agent_data_created": true,
+    "temporary_artifacts_cleaned": true,
+    "distribution_offline_smoke": true,
+    "only_worker_imports_dbghelp_winhttp": true
+  },
+  "runtime_admission": [
+    "per-feature native contracts",
+    "separate ViewModel/UI identity contracts",
+    "reorder method contract independent of appearance",
+    "same-identity additive capability refresh only",
+    "loaded PE/PDB and live vtable/entry validation",
+    "actual appearance/order readback required"
+  ],
+  "limits": [
+    "Only current local Windows module set has read-only PDB evidence",
+    "Other builds and real UI behavior need manual validation",
+    "ARM64 internal adapters unsupported",
+    "Inventory retains explicitly verified table/host layout constraints",
+    "ABI, register or layout changes can reject individual capabilities",
+    "No runtime Hook, Explorer restart or existing agent replacement performed this turn"
+  ],
+  "artifacts": [
+    "build/research/v011-native-report.json",
+    "build/research/v011-view-report.json",
+    "build/research/v011-ui-report.json",
+    "build/research/v011-all-report.json",
+    "build/research/v011-ctest.log",
+    "build/research/v011-final-build.log"
+  ],
+  "manual_test": "docs/testing-v0.11.0.md"
+}

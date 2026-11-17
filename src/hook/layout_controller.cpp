@@ -1,0 +1,53 @@
+#include "hook/layout.hpp"
+#include "hook/identity.hpp"
+#include "platform/explorer.hpp"
+#include <sddl.h>
+#include <atomic>
+
+namespace tabtail {
+Json send_layout_request(const NativeTab& tab, LayoutAction action, const TabAppearance& options) {
+    validate_appearance(options);
+    bool allowed = false;
+    for (const auto& process : explorer_processes())
+        if (process.pid == tab.process_id && process.created == tab.process_started) allowed = true;
+    if (!allowed) throw Error(4, "无法验证布局目标 Explorer 的用户、会话或进程身份");
+    if (!native_inventory_supported()) throw Error(3, "当前 Explorer 版本尚无布局适配");
+    auto dll = executable_path().parent_path() / L"tabtail-layout.dll";
+    auto module = LoadLibraryExW(dll.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
+    if (!module) throw Error(1, system_error("加载 tabtail-layout.dll"));
+    struct Module { HMODULE value; ~Module() { FreeLibrary(value); } } module_owner{module};
+    auto callback = reinterpret_cast<HOOKPROC>(GetProcAddress(module, "TabTailLayoutHook"));
+    if (!callback) throw Error(1, "布局 DLL 缺少桥接导出");
+    DWORD pid{}; auto thread = GetWindowThreadProcessId(tab.window, &pid);
+    if (pid != tab.process_id) throw Error(4, "布局目标窗口身份已变化");
+    auto hook = SetWindowsHookExW(WH_CALLWNDPROC, callback, module, thread);
+    if (!hook) throw Error(4, system_error("接入 Explorer 布局线程"));
+    struct Hook { HHOOK value; ~Hook() { UnhookWindowsHookEx(value); } } hook_owner{hook};
+    static std::atomic<uint64_t> counter{GetTickCount64() << 16}; auto nonce = ++counter;
+    PSECURITY_DESCRIPTOR descriptor{};
+    auto sddl = L"D:P(A;;GA;;;" + current_sid() + L")";
+    if (!ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(), SDDL_REVISION_1, &descriptor, nullptr))
+        throw Error(4, "创建布局桥接权限失败");
+    SECURITY_ATTRIBUTES security{sizeof(security), descriptor, FALSE};
+    Handle mapping(CreateFileMappingW(INVALID_HANDLE_VALUE, &security, PAGE_READWRITE, 0, sizeof(LayoutPacket), layout_mapping(GetCurrentProcessId(), nonce).c_str()));
+    auto error = GetLastError(); LocalFree(descriptor);
+    if (!mapping || error == ERROR_ALREADY_EXISTS) throw Error(1, "创建唯一布局映射失败");
+    auto* packet = static_cast<LayoutPacket*>(MapViewOfFile(mapping.get(), FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, sizeof(LayoutPacket)));
+    if (!packet) throw Error(1, system_error("映射布局请求"));
+    struct View { void* value; ~View() { UnmapViewOfFile(value); } } view{packet};
+    new(packet) LayoutPacket;
+    packet->nonce = nonce; packet->sender_pid = GetCurrentProcessId(); packet->sender_started = bridge_process_started(GetCurrentProcess());
+    packet->target_started = tab.process_started; packet->window = reinterpret_cast<uintptr_t>(tab.window); packet->action = action;
+    packet->mode = options.width_mode == "fixed" ? 1 : options.width_mode == "content" ? 2 : 0;
+    packet->width = options.width; packet->min_width = options.min_width; packet->max_width = options.max_width;
+    DWORD_PTR ignored{};
+    if (!SendMessageTimeoutW(tab.window, RegisterWindowMessageW(layout_message), GetCurrentProcessId(), static_cast<LPARAM>(nonce),
+        SMTO_ABORTIFHUNG | SMTO_BLOCK, 4000, &ignored)) throw Error(5, "Explorer 布局请求超时，结果未确认");
+    if (InterlockedCompareExchange(&packet->completed, 0, 0) != 1) throw Error(3, "Explorer 未确认布局请求");
+    if (FAILED(packet->result) && packet->result != E_PENDING)
+        throw Error(3, system_error("Explorer 布局适配失败", static_cast<DWORD>(packet->result))+": "+std::string(packet->report,strnlen_s(packet->report,sizeof(packet->report))));
+    auto report = Json::parse(std::string(packet->report, strnlen_s(packet->report, sizeof(packet->report))));
+    report["pending"] = packet->result == E_PENDING;
+    return report;
+}
+}

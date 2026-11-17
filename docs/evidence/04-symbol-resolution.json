@@ -1,0 +1,138 @@
+{
+  "date": "2026-11-18",
+  "method": "read-only PE RSDS / PDB info identity + DbgHelp in a separate Python process",
+  "attached_to_explorer": false,
+  "network_symbol_download_in_probe": false,
+  "process_bits": 64,
+  "modules": [
+    {
+      "image": {
+        "file": "C:\\Windows\\System32\\ExplorerFrame.dll",
+        "sha256": "4e28d2076608df5525ec1b7b2ed8dc0e866f43bf2ded6a5e4213ccd1c2284cbe",
+        "machine": "0x8664",
+        "image_size": 3039232,
+        "guid": "e183f37e-71ab-7e36-957e-e0d4e284fc46",
+        "age": 1,
+        "pdb_name": "ExplorerFrame.pdb"
+      },
+      "pdb": {
+        "file": "build\\research\\ExplorerFrame.pdb",
+        "sha256": "fafd3f07768bff512dbc262ac7d7ac85fee42a27ce7d81b7bfaf147e3cc33ecd",
+        "guid": "e183f37e-71ab-7e36-957e-e0d4e284fc46",
+        "info_stream_age": 3,
+        "dbi_stream_age": 1
+      },
+      "identity_matched": true,
+      "symbols": [
+        {
+          "name": "??_7CExplorerFrame@@6BCImpWndProc@@@",
+          "expected_rva": "0x24d2e0",
+          "resolved_rva": "0x24d2e0",
+          "matched": true
+        },
+        {
+          "name": "??_7CBrowserHost@@6BDWebBrowserEvents2@@@",
+          "expected_rva": "0x241958",
+          "resolved_rva": "0x241958",
+          "matched": true
+        },
+        {
+          "name": "??_7CBrowserHost@@6BIBrowserHost@@@",
+          "expected_rva": "0x241858",
+          "resolved_rva": "0x241858",
+          "matched": true
+        },
+        {
+          "name": "?SetFrameTitle@CExplorerFrame@@QEAAXPEBGU_GUID@@@Z",
+          "expected_rva": "0x42cc0",
+          "resolved_rva": "0x42cc0",
+          "matched": true
+        },
+        {
+          "name": "?GetLocationItem@CBrowserHost@@UEAAJAEBU_GUID@@PEAPEAX@Z",
+          "expected_rva": "0xe7040",
+          "resolved_rva": "0xe7040",
+          "matched": true
+        },
+        {
+          "name": "?RemoveTab@CExplorerFrame@@UEAAJU_GUID@@@Z",
+          "expected_rva": "0x1a6be0",
+          "resolved_rva": "0x1a6be0",
+          "matched": true
+        },
+        {
+          "name": "?OnClose@CBrowserHost@@AEAAJ_N@Z",
+          "expected_rva": "0x125da4",
+          "resolved_rva": "0x125da4",
+          "matched": true
+        },
+        {
+          "name": "?_NavigateToPidl@CShellBrowser@@AEAAJPEBU_ITEMIDLIST_ABSOLUTE@@KK@Z",
+          "expected_rva": "0x137b08",
+          "resolved_rva": "0x137b08",
+          "matched": true
+        }
+      ],
+      "dbghelp": {
+        "exact_symbols": true,
+        "sym_type": 3,
+        "pdb_unmatched": false,
+        "loaded_pdb": "D:\\100_Projects\\110_Daily\\test2\\build\\research\\ExplorerFrame.pdb",
+        "pdb_age": 1,
+        "pdb_guid": "e183f37e-71ab-7e36-957e-e0d4e284fc46",
+        "type_info": false,
+        "publics": true,
+        "global_symbols": false
+      }
+    },
+    {
+      "image": {
+        "file": "C:\\Windows\\SystemApps\\MicrosoftWindows.Client.FileExp_cw5n1h2txyewy\\FileExplorerExtensions.dll",
+        "sha256": "abdab68ac72b9b45dbf2001e81232041c78cac4f33ea37db445e43df4919c6a3",
+        "machine": "0x8664",
+        "image_size": 6078464,
+        "guid": "2e4a0255-7b9b-4908-917a-df0e377b9327",
+        "age": 1,
+        "pdb_name": "FileExplorerExtensions.pdb"
+      },
+      "pdb": {
+        "file": "build\\research\\FileExplorerExtensions.pdb",
+        "sha256": "6854869f086803bf513e58c228972f6281c9a0ce91cc387153ad47f6e3b3bef2",
+        "guid": "2e4a0255-7b9b-4908-917a-df0e377b9327",
+        "info_stream_age": 2,
+        "dbi_stream_age": 1
+      },
+      "identity_matched": true,
+      "symbols": [
+        {
+          "name": "?get_FileExplorerTab@?$produce@UFileExplorerTabItemControlVM@implementation@FileExplorerExtensions@winrt@@UIFileExplorerTabItemControlVM@34@@impl@winrt@@UEAAHPEAPEAX@Z",
+          "expected_rva": "0xee230",
+          "resolved_rva": "0xee230",
+          "matched": true
+        }
+      ],
+      "dbghelp": {
+        "exact_symbols": true,
+        "sym_type": 3,
+        "pdb_unmatched": false,
+        "loaded_pdb": "D:\\100_Projects\\110_Daily\\test2\\build\\research\\FileExplorerExtensions.pdb",
+        "pdb_age": 1,
+        "pdb_guid": "2e4a0255-7b9b-4908-917a-df0e377b9327",
+        "type_info": false,
+        "publics": true,
+        "global_symbols": false
+      }
+    }
+  ],
+  "independent_download_check": {
+    "url": "https://msdl.microsoft.com/download/symbols/ExplorerFrame.pdb/E183F37E71AB7E36957EE0D4E284FC461/ExplorerFrame.pdb",
+    "downloaded_pdb": {
+      "file": "build\\research\\ep-symbol-pdb\\ExplorerFrame.pdb",
+      "sha256": "fafd3f07768bff512dbc262ac7d7ac85fee42a27ce7d81b7bfaf147e3cc33ecd",
+      "guid": "e183f37e-71ab-7e36-957e-e0d4e284fc46",
+      "info_stream_age": 3,
+      "dbi_stream_age": 1
+    },
+    "matches_existing_sha256": true
+  }
+}

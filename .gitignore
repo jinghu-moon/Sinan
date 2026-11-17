@@ -1,0 +1,42 @@
+# Generated builds and dependency downloads
+/build/
+/out/
+/_CPack_Packages/
+/.vs/
+CMakeUserPresets.json
+# Local research checkouts, agent state and rendered previews
+/refer/
+/.serena/
+/.spec-workflow/
+/.claude/
+/.codex/
+/tui-artifacts/
+# Raw captures may contain local paths or user folder contents
+/docs/evidence/01-*
+/docs/evidence/02-*
+/docs/evidence/03-*
+# Runtime configuration and state
+/tabtail.toml
+/sinan.toml
+/workspace.json
+/install-state.json
+/startup-state.json
+.env
+.env.*
+!.env.example
+# Compiler, IDE and runtime artifacts
+*.user
+*.suo
+*.exe
+*.dll
+*.lib
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.dmp
+*.log
+*.zip
+*.7z
+__pycache__/
+*.py[cod]

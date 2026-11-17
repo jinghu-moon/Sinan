@@ -1,0 +1,177 @@
+{
+  "version": "0.10.0",
+  "date": "2026-11-18",
+  "mode": "Read-only isolated symbol preparation; no Explorer attachment, injection, navigation or title writes",
+  "default_cache_modified": false,
+  "user_agent_restarted": false,
+  "explorer_restarted": false,
+  "verification": {
+    "ctest_suites_passed": 20,
+    "ctest_failures": 0,
+    "compatibility_checks": 29,
+    "tui_component_checks": 1747,
+    "other_windows_builds_tested": false,
+    "synthetic_pe_with_non_builtin_addresses_accepted": true
+  },
+  "online_preparation": {
+    "adapter": "built-in exact SHA256",
+    "cache_directory": "D:\\100_Projects\\110_Daily\\test2\\build\\research\\v010-network-cache",
+    "cache_valid": true,
+    "capabilities": {
+      "com_observation": true,
+      "native_inventory": true,
+      "protection": true,
+      "reorder": "Separate extension hash and method verification required",
+      "tab_icons_and_text": "Separate FileExplorerExtensions / Windows.UI.FileExplorer identity and runtime checks",
+      "tab_selection": true,
+      "tab_width": "XAML property lookup and measured readback required",
+      "title": true
+    },
+    "image": {
+      "image_size": 3039232,
+      "machine": 34404,
+      "pdb_age": 1,
+      "pdb_guid": "{E183F37E-71AB-7E36-957E-E0D4E284FC46}",
+      "pdb_key": "E183F37E71AB7E36957EE0D4E284FC461",
+      "pdb_name": "ExplorerFrame.pdb",
+      "sha256": "4e28d2076608df5525ec1b7b2ed8dc0e866f43bf2ded6a5e4213ccd1c2284cbe",
+      "timestamp": 3210197039
+    },
+    "manifest": "D:\\100_Projects\\110_Daily\\test2\\build\\research\\v010-network-cache\\4e28d2076608df5525ec1b7b2ed8dc0e866f43bf2ded6a5e4213ccd1c2284cbe\\profile.json",
+    "message": "符号已准备，身份及布局校验通过；运行中的目标仍需逐次校验。",
+    "missing_symbols": [],
+    "network_used": true,
+    "prepared": true,
+    "ready": true,
+    "schema": 1,
+    "symbol_profile": {
+      "inventory": true,
+      "reason": "Symbol identity and layout contract accepted; target module and objects still require runtime validation",
+      "rvas": {
+        "frame_ctor": 1687004,
+        "frame_vtable": 2413280,
+        "host_ctor": 618520,
+        "host_interface": 2365528,
+        "host_vtable": 2365784,
+        "host_window": 1210848,
+        "host_window_interface": 2365872,
+        "location": 946240,
+        "tab_lookup": 742888,
+        "title": 273600
+      },
+      "title": true
+    },
+    "worker_isolated": true
+  },
+  "offline_local_pdb": {
+    "adapter": "built-in exact SHA256",
+    "cache_directory": "D:\\100_Projects\\110_Daily\\test2\\build\\research\\v010-symbol-cache",
+    "cache_valid": true,
+    "capabilities": {
+      "com_observation": true,
+      "native_inventory": true,
+      "protection": true,
+      "reorder": "Separate extension hash and method verification required",
+      "tab_icons_and_text": "Separate FileExplorerExtensions / Windows.UI.FileExplorer identity and runtime checks",
+      "tab_selection": true,
+      "tab_width": "XAML property lookup and measured readback required",
+      "title": true
+    },
+    "image": {
+      "image_size": 3039232,
+      "machine": 34404,
+      "pdb_age": 1,
+      "pdb_guid": "{E183F37E-71AB-7E36-957E-E0D4E284FC46}",
+      "pdb_key": "E183F37E71AB7E36957EE0D4E284FC461",
+      "pdb_name": "ExplorerFrame.pdb",
+      "sha256": "4e28d2076608df5525ec1b7b2ed8dc0e866f43bf2ded6a5e4213ccd1c2284cbe",
+      "timestamp": 3210197039
+    },
+    "manifest": "D:\\100_Projects\\110_Daily\\test2\\build\\research\\v010-symbol-cache\\4e28d2076608df5525ec1b7b2ed8dc0e866f43bf2ded6a5e4213ccd1c2284cbe\\profile.json",
+    "message": "符号已准备，身份及布局校验通过；运行中的目标仍需逐次校验。",
+    "missing_symbols": [],
+    "network_used": false,
+    "prepared": true,
+    "ready": true,
+    "schema": 1,
+    "symbol_profile": {
+      "inventory": true,
+      "reason": "Symbol identity and layout contract accepted; target module and objects still require runtime validation",
+      "rvas": {
+        "frame_ctor": 1687004,
+        "frame_vtable": 2413280,
+        "host_ctor": 618520,
+        "host_interface": 2365528,
+        "host_vtable": 2365784,
+        "host_window": 1210848,
+        "host_window_interface": 2365872,
+        "location": 946240,
+        "tab_lookup": 742888,
+        "title": 273600
+      },
+      "title": true
+    },
+    "worker_isolated": true
+  },
+  "cached_offline_reuse": {
+    "adapter": "built-in exact SHA256",
+    "cache_directory": "D:\\100_Projects\\110_Daily\\test2\\build\\research\\v010-network-cache",
+    "cache_valid": true,
+    "capabilities": {
+      "com_observation": true,
+      "native_inventory": true,
+      "protection": true,
+      "reorder": "Separate extension hash and method verification required",
+      "tab_icons_and_text": "Separate FileExplorerExtensions / Windows.UI.FileExplorer identity and runtime checks",
+      "tab_selection": true,
+      "tab_width": "XAML property lookup and measured readback required",
+      "title": true
+    },
+    "image": {
+      "image_size": 3039232,
+      "machine": 34404,
+      "pdb_age": 1,
+      "pdb_guid": "{E183F37E-71AB-7E36-957E-E0D4E284FC46}",
+      "pdb_key": "E183F37E71AB7E36957EE0D4E284FC461",
+      "pdb_name": "ExplorerFrame.pdb",
+      "sha256": "4e28d2076608df5525ec1b7b2ed8dc0e866f43bf2ded6a5e4213ccd1c2284cbe",
+      "timestamp": 3210197039
+    },
+    "manifest": "D:\\100_Projects\\110_Daily\\test2\\build\\research\\v010-network-cache\\4e28d2076608df5525ec1b7b2ed8dc0e866f43bf2ded6a5e4213ccd1c2284cbe\\profile.json",
+    "message": "内置适配可离线使用；符号缓存状态独立显示。",
+    "missing_symbols": [],
+    "network_used": false,
+    "prepared": true,
+    "ready": true,
+    "reused": true,
+    "schema": 1,
+    "symbol_profile": {
+      "inventory": true,
+      "reason": "Symbol identity and layout contract accepted; target module and objects still require runtime validation",
+      "rvas": {
+        "frame_ctor": 1687004,
+        "frame_vtable": 2413280,
+        "host_ctor": 618520,
+        "host_interface": 2365528,
+        "host_vtable": 2365784,
+        "host_window": 1210848,
+        "host_window_interface": 2365872,
+        "location": 946240,
+        "tab_lookup": 742888,
+        "title": 273600
+      },
+      "title": true
+    },
+    "worker_isolated": true
+  },
+  "mismatched_module_pdb": {
+    "error": "DbgHelp rejected exact PDB GUID/Age identity",
+    "message": "DbgHelp rejected exact PDB GUID/Age identity",
+    "prepared": false
+  },
+  "limitations": [
+    "Only title and native inventory use symbol-based admission.",
+    "Protection, navigation lock, tab selection, reorder and private XAML identity still need separately verified adapters.",
+    "Actual cross-build Explorer behavior has not been claimed or automatically exercised."
+  ]
+}

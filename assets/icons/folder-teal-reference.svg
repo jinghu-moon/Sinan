@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1104" height="1100" viewBox="0 0 1104 1100" fill="none">
+  <title>Teal blue folder</title>
+  <desc>Rounded teal-to-blue folder with a light inner sheet and a soft shadow. Transparent background.</desc>
+  <defs>
+    <linearGradient id="folder-back" x1="63" y1="208" x2="1055" y2="235" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8DB9BA"/>
+      <stop offset=".46" stop-color="#7EA6B2"/>
+      <stop offset="1" stop-color="#5F83AC"/>
+    </linearGradient>
+    <linearGradient id="back-highlight" x1="560" y1="84" x2="560" y2="350" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#D1E4DF" stop-opacity=".23"/>
+      <stop offset=".18" stop-color="#B7D5D4" stop-opacity=".05"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="folder-lip" x1="63" y1="330" x2="1055" y2="330" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#68999D"/>
+      <stop offset="1" stop-color="#476D94"/>
+    </linearGradient>
+    <linearGradient id="folder-front" x1="63" y1="641" x2="1055" y2="662" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#8AB8B9"/>
+      <stop offset=".43" stop-color="#7DA8B4"/>
+      <stop offset="1" stop-color="#5E82AC"/>
+    </linearGradient>
+    <linearGradient id="front-edge" x1="559" y1="332" x2="559" y2="381" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#C6DEDE" stop-opacity=".16"/>
+      <stop offset="1" stop-color="#C6DEDE" stop-opacity="0"/>
+    </linearGradient>
+    <filter id="folder-shadow" x="20" y="50" width="1075" height="1015" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="18" stdDeviation="12" flood-color="#000000" flood-opacity=".24"/>
+    </filter>
+    <filter id="paper-softness" x="104" y="249" width="911" height="130" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="1.6"/>
+    </filter>
+    <path id="back-shape" d="M122 84H451C487 84 509 106 509 142V182H995C1032 182 1056 207 1056 244V916C1056 954 1032 977 995 977H123C85 977 62 954 62 916V145C62 107 85 84 122 84Z"/>
+    <path id="front-shape" d="M123 332H995C1033 332 1056 355 1056 393V916C1056 953 1032 977 995 977H123C85 977 62 953 62 916V393C62 355 85 332 123 332Z"/>
+  </defs>
+  <g filter="url(#folder-shadow)">
+    <use href="#back-shape" fill="url(#folder-back)"/>
+    <use href="#back-shape" fill="url(#back-highlight)"/>
+    <path fill="url(#folder-lip)" d="M123 307H995C1033 307 1056 330 1056 368V430H62V368C62 330 85 307 123 307Z"/>
+    <path fill="#E5E5E5" filter="url(#paper-softness)" d="M173 257H946C983 257 1006 280 1006 317V369H112V317C112 280 136 257 173 257Z"/>
+    <use href="#front-shape" fill="url(#folder-front)"/>
+    <use href="#front-shape" fill="url(#front-edge)"/>
+  </g>
+</svg>

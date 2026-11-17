@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <title>TabTail pinned folder — light</title>
+  <defs>
+    <linearGradient id="back" x1="0" y1="0" x2="0.7" y2="1"><stop stop-color="#C7DDFF"/><stop offset="1" stop-color="#9AC2F7"/></linearGradient>
+    <linearGradient id="front" x1="0" y1="0" x2="0.75" y2="1"><stop stop-color="#F4F8FF"/><stop offset="1" stop-color="#DAE8FC"/></linearGradient>
+  </defs>
+  <path fill="url(#back)" d="M12 8h10.5a6 6 0 0 1 4.24 1.76L32 15h18a10 10 0 0 1 10 10v21a10 10 0 0 1-10 10H14A10 10 0 0 1 4 46V16a8 8 0 0 1 8-8Z"/>
+  <path fill="url(#front)" d="M14 20h36a10 10 0 0 1 10 10v16a10 10 0 0 1-10 10H14A10 10 0 0 1 4 46V30a10 10 0 0 1 10-10Z"/>
+  <path fill="none" stroke="#FFFFFF" stroke-opacity=".25" stroke-width=".6" d="M14 20.3h36a9.7 9.7 0 0 1 9.7 9.7v16a9.7 9.7 0 0 1-9.7 9.7H14a9.7 9.7 0 0 1-9.7-9.7V30a9.7 9.7 0 0 1 9.7-9.7Z"/>
+  <path fill="#145FD0" transform="translate(32 28) scale(1.65) rotate(43 8 8)" d="M5.25 1.5h5.5a.7.7 0 0 1 .7.7v.8a.7.7 0 0 1-.7.7h-.9v3l2.25 2.25a.8.8 0 0 1 .25.56v.44a.8.8 0 0 1-.8.8H8.8v3.2a.8.8 0 0 1-1.6 0v-3.2H4.45a.8.8 0 0 1-.8-.8v-.44a.8.8 0 0 1 .25-.56L6.15 6.7v-3h-.9a.7.7 0 0 1-.7-.7v-.8a.7.7 0 0 1 .7-.7Z"/>
+</svg>

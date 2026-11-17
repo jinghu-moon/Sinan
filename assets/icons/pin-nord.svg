@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 16 16">
+  <title>TabTail pinned tab</title>
+  <path fill="#88C0D0" transform="rotate(45 8 8)" d="M5.25 1.5h5.5a.5.5 0 0 1 .5.5v1a.5.5 0 0 1-.5.5h-1v3.25l2.35 2.35a.5.5 0 0 1 .15.35V10a.5.5 0 0 1-.5.5h-3v3.75L8 15l-.75-.75V10.5h-3a.5.5 0 0 1-.5-.5v-.55a.5.5 0 0 1 .15-.35l2.35-2.35V3.5h-1a.5.5 0 0 1-.5-.5V2a.5.5 0 0 1 .5-.5Z"/>
+</svg>
