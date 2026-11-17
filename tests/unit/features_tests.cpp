@@ -5,7 +5,7 @@
 #include <atomic>
 #include <iostream>
 
-using namespace tabtail;
+using namespace sinan;
 namespace {
 int checks{};
 void expect(bool value,const char* message){++checks;if(!value)throw std::runtime_error(message);}
@@ -18,7 +18,7 @@ public:
     ULONG STDMETHODCALLTYPE AddRef()override{return ++refs_;}ULONG STDMETHODCALLTYPE Release()override{auto n=--refs_;if(!n)delete this;return n;}
 };
 int main() {
-    auto root=fs::temp_directory_path()/(L"TabTail-features-"+std::to_wstring(GetCurrentProcessId()));
+    auto root=fs::temp_directory_path()/(L"Sinan-features-"+std::to_wstring(GetCurrentProcessId()));
     try {
         TabFlags flags{true,true,true};flags.pinned=false;expect(flags.close_protected()&&flags.locked,"unpin must preserve explicit protection and lock");
         flags.protected_tab=false;expect(!flags.close_protected()&&flags.locked,"lock is independent from close protection");
@@ -46,7 +46,7 @@ int main() {
         rejects([&]{validate_style({{"text",{{"bold","false"}}}});});
         rejects([&]{validate_style({{"text",{{"font_color","#xyz123"}}}});});
         rejects([&]{validate_style({{"icon",{{"source","missing.svg"}}}});});
-        rejects([&]{validate_style({{"text",{{"font_family","NoSuchTabTailFont9827"}}}});});
+        rejects([&]{validate_style({{"text",{{"font_family","NoSuchSinanFont9827"}}}});});
         rejects([&]{auto bad=f;bad["tab_style"]["rules"][0]["patterns"]={"D:\\[!abc]\\**"};validate_features(bad);});
         auto color_layers=default_features();color_layers["tab_style"]["pinned"]["light"]["text"]["selected"]="#112233";
         color_layers["tab_style"]["locked"]["text"]["font_color"]="system";
@@ -56,9 +56,9 @@ int main() {
         ConfigStore store(root);
         atomic_write(store.path(),"schema_version=2\nrevision=3\nenabled=false\nautostart=false\n[display]\ndepth=3\nseparator='\\'\n");
         expect(store.load().features==default_features(),"legacy defaults");
-        auto old=read_file(store.path());expect(!fs::exists(root/L"tabtail.pre-schema3.toml"),"read does not migrate");
+        auto old=read_file(store.path());expect(!fs::exists(root/L"sinan.pre-schema3.toml"),"read does not migrate");
         auto config=store.update([&](Config& c){c.features=f;});
-        expect(read_file(root/L"tabtail.pre-schema3.toml")==old,"upgrade backup exact");
+        expect(read_file(root/L"sinan.pre-schema3.toml")==old,"upgrade backup exact");
         expect(store.load().features==f&&config_json(config).at("schema_version")==4,"schema3 TOML roundtrip");
         auto no_pin_override=f;no_pin_override["tab_style"]["pinned"]={{"enabled",true}};
         store.update([&](Config& c){c.features=no_pin_override;});expect(!store.load().features.at("tab_style").at("pinned").contains("icon"),"removed state icon override stays inherited after TOML reload");

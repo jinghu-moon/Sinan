@@ -2,7 +2,7 @@
 #include "config/config.hpp"
 #include <vector>
 
-namespace tabtail {
+namespace sinan {
 struct RegistryValue {
     bool exists = false;
     DWORD type = REG_EXPAND_SZ;

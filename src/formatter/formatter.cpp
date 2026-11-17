@@ -2,7 +2,7 @@
 #include <vector>
 #include "policy/entries.hpp"
 
-namespace tabtail {
+namespace sinan {
 Title format_title(std::wstring_view input, const DisplayOptions& c, std::wstring_view original) {
     validate_display(c);
     if(auto alias=alias_title(c.entries,input,c))return {*alias,true,false};

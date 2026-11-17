@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <set>
 
-namespace tabtail {
+namespace sinan {
 namespace {
 [[noreturn]] void invalid(const char* message) { throw PolicyError(PolicyErrorCode::invalid_argument, message); }
 using Text = std::u32string;

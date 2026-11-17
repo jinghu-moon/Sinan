@@ -5,7 +5,7 @@
 #include "tui/form.hpp"
 #include "app/service.hpp"
 #include "formatter/formatter.hpp"
-#include "agent/interaction.hpp"
+#include "ui/shortcut_recorder.hpp"
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
 #include <ftxui/component/screen_interactive.hpp>
@@ -20,7 +20,7 @@
 #include <iostream>
 #include <io.h>
 
-namespace tabtail {
+namespace sinan {
 namespace {
 using namespace ftxui;
 std::string fit_cell(const std::string& value,int width,bool keep_tail=false) {
@@ -915,7 +915,7 @@ public:
             return hbox({filler(),vbox(std::move(content))|size(WIDTH,EQUAL,total),filler()});
         });
         auto doctor=button("doctor",[=,this]{request({{"action","doctor"}});});
-        auto restart=button("restart",[=,this]{open_confirmation({{"action","restart"}});});
+        auto restart=button("restart",[=,this]{open_confirmation({{"action","restart"},{"force",true}});});
         auto stop_agent=button("stop_agent",[=,this]{open_confirmation({{"action","agent.stop"}});});
         auto help=button("help",[=,this]{open_help();});
         auto batch_action_choice=Make<FormChoice>(&batch_operations,&batch_operation),batch_state_choice=Make<FormChoice>(&batch_states,&batch_state);
@@ -992,7 +992,7 @@ public:
             
             std::string state=!agent.value("running",false)?tr["offline"]:agent.value("mode",std::string{})=="customize"?tr[agent.value("runtime_applied",false)?"customizing":"customize_unconfirmed"]:tr["observing"];
             auto search_bar=page==0?search_input->Render()|size(WIDTH,EQUAL,std::max(20,viewport_width/3)):text("Nord / Truecolor")|color(nord::blue);
-            return vbox({hbox({text(" TabTail ")|bold|color(nord::cyan),text(" "),search_bar,filler(),text(" "+state+" ")|color(agent.value("mode",std::string{})=="customize"?nord::green:nord::blue)}),
+            return vbox({hbox({text(" Sinan ")|bold|color(nord::cyan),text(" "),search_bar,filler(),text(" "+state+" ")|color(agent.value("mode",std::string{})=="customize"?nord::green:nord::blue)}),
                 hbox({navigation->Render(),filler(),text(std::to_string(tabs.size())+" / "+std::to_string(config.rules.size())+" ")|color(nord::blue)}),
                 pages->Render()|flex,
                 actions->Render(),
@@ -1475,7 +1475,7 @@ int verify_tui_components(const fs::path& artifacts) {
         ui.tr.set_language(lang);ui.relabel();ui.rebuild_lists();
         for(int page=0;page<5;++page) {
             ui.page=page;auto content=render(lang+"-page-"+std::to_string(page));
-            expect(content.find("TabTail")!=std::string::npos,"page renders");
+            expect(content.find("Sinan")!=std::string::npos,"page renders");
             expect(content.find(ui.tr[page==0?"tabs":page==1?"rules":page==2?"settings":"tools"])!=std::string::npos,"page translation renders");
             render(lang+"-narrow-page-"+std::to_string(page),72,30);
         }
@@ -1668,7 +1668,7 @@ int verify_tui_components(const fs::path& artifacts) {
         ui.tr.set_language(lang);ui.relabel();ui.root->OnEvent(Event::F9);expect(ui.page==4,"F9 opens directory entries");
         auto content=render(lang+"-entries-empty",72,24);expect(content.find(ui.tr["pinned_position"])!=std::string::npos,"docking control visible at minimum size");
         expect(content.find("F9")!=std::string::npos,"fifth navigation key fits at minimum width");
-        ui.edit_entry(true);ui.entry_id="work";ui.entry_name="开发";ui.entry_path="D:\\Projects\\TabTail";ui.entry_shortcut="Ctrl+Alt+1";ui.entry_descendants=true;ui.entry_title_mode=2;
+        ui.edit_entry(true);ui.entry_id="work";ui.entry_name="开发";ui.entry_path="D:\\Projects\\Sinan";ui.entry_shortcut="Ctrl+Alt+1";ui.entry_descendants=true;ui.entry_title_mode=2;
         render(lang+"-entry-editor",72,24);ui.busy=false;ui.apply_entry();
         expect(submitted.at("group")=="directories"&&submitted.at("value").at("entries")[0].at("title")=="alias_depth","entry editor saves shared shortcut/alias entry");
         ui.busy=false;ui.entry_shortcut="Ctrl+W";auto before=submitted;ui.apply_entry();expect(submitted==before&&!ui.local_error.empty(),"reserved directory chord cannot be saved");
@@ -1810,7 +1810,7 @@ int verify_tui_components(const fs::path& artifacts) {
         fresh.tab_depth="3";fresh.root->OnEvent(Event::Escape);fresh.edit_tab();
         expect(fresh.tab_editor->ChildAt(0)->Focused(),"tab editor always reopens on its first control");fresh.root->OnEvent(Event::Escape);
         fresh.edit_rule(false);check_footer(paint("rule"),"rule_edit","apply");fresh.root->OnEvent(Event::Escape);
-        fresh.open_confirmation({{"action","restart"}});expect(fresh.confirm_cancel_button->Focused(),"destructive confirmation initially selects cancel");
+        fresh.open_confirmation({{"action","restart"},{"force",true}});expect(fresh.confirm_cancel_button->Focused(),"destructive confirmation initially selects cancel");
         check_footer(paint("confirmation"),"confirm","cancel");fresh.root->OnEvent(Event::Return);
         expect(!fresh.show_modal&&sent.is_null(),"Enter on a newly opened confirmation cancels without a request");
         fresh.open_confirmation({{"action","tabs.batch"},{"operation","pin"},{"enabled",true},{"tab_ids",Json::array({"a","b"})}});

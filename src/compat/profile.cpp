@@ -5,7 +5,7 @@
 #include <cstring>
 #include <mutex>
 
-namespace tabtail::compat {
+namespace sinan::compat {
 namespace {
 constexpr SymbolSpec specs[]{
     {"frame_vtable","??_7CExplorerFrame@@6BCImpWndProc@@@",false},

@@ -4,8 +4,8 @@
 #include <cstring>
 #include <functional>
 
-using namespace tabtail;
-using namespace tabtail::compat;
+using namespace sinan;
+using namespace sinan::compat;
 namespace {
 int checks=0;
 void expect(bool ok,const char* message){++checks;if(!ok)throw std::runtime_error(message);}

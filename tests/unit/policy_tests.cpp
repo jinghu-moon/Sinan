@@ -4,7 +4,7 @@
 #include <iostream>
 #include <stdexcept>
 
-using namespace tabtail;
+using namespace sinan;
 namespace {
 int checks = 0;
 void expect(bool condition, const char* message) {

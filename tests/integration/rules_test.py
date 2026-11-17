@@ -7,7 +7,8 @@ import tempfile
 import tomllib
 
 exe = str(Path(sys.argv[1]).resolve())
-with tempfile.TemporaryDirectory(prefix="TabTail-rules-cli-") as temporary:
+tui_enabled = len(sys.argv) < 3 or sys.argv[2] == "ON"
+with tempfile.TemporaryDirectory(prefix="Sinan-rules-cli-") as temporary:
     root = Path(temporary) / "中文规则"
 
     def call(*arguments, code=0):
@@ -29,7 +30,7 @@ with tempfile.TemporaryDirectory(prefix="TabTail-rules-cli-") as temporary:
     assert result["action"] == "native" and result["preview_title"] is None
     call("rules", "add", "special", "--exact", "--pattern", r"D:\Projects\[literal]", "--depth", "all")
     assert call("rules", "test", r"D:\Projects\[literal]")["depth"] == "all"
-    config_file = root / "tabtail.toml"
+    config_file = root / "sinan.toml"
     previous = config_file.read_bytes()
     for bad in [r"!D:\Projects\**", r"D:\Projects\[!abc]", r"D:\Projects\[^abc]", r"D:\Projects\x**y"]:
         call("rules", "add", "bad", "--pattern", bad, code=2)
@@ -40,13 +41,17 @@ with tempfile.TemporaryDirectory(prefix="TabTail-rules-cli-") as temporary:
     call("rules", "delete", "special")
     assert len(call("rules", "list")) == 3
     before = config_file.read_bytes()
-    for lang, word in [("en", "Directory rules"), ("zh-CN", "目录规则")]:
-        p = subprocess.run([exe, "--data-dir", str(root), "tui", "--snapshot", "--lang", lang],
-                           capture_output=True, text=True, encoding="utf-8", timeout=15)
-        assert p.returncode == 0 and word in p.stdout, (p.returncode, p.stdout, p.stderr)
-    assert config_file.read_bytes() == before, "session language override never rewrites config"
-    call("tui", "--lang", "de", "--snapshot", code=2)
-    call("tui", code=2)  # Redirected stdin must not start an interactive loop.
+    if tui_enabled:
+        for lang, word in [("en", "Directory rules"), ("zh-CN", "目录规则")]:
+            p = subprocess.run([exe, "--data-dir", str(root), "tui", "--snapshot", "--lang", lang],
+                               capture_output=True, text=True, encoding="utf-8", timeout=15)
+            assert p.returncode == 0 and word in p.stdout, (p.returncode, p.stdout, p.stderr)
+        assert config_file.read_bytes() == before, "session language override never rewrites config"
+        call("tui", "--lang", "de", "--snapshot", code=2)
+        call("tui", code=2)  # Redirected stdin must not start an interactive loop.
+    else:
+        call("tui", "--snapshot", code=3)
+        assert config_file.read_bytes() == before, "headless TUI diagnostic never rewrites config"
     try:
         call("agent", "start")
         listing = call("tabs", "list")

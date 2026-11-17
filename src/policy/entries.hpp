@@ -2,7 +2,7 @@
 #include "policy/display.hpp"
 #include <vector>
 
-namespace tabtail {
+namespace sinan {
 // Lexical normalization only; no filesystem/network access on Explorer's UI thread.
 std::wstring directory_key(std::wstring_view path);
 void validate_entries(const std::vector<DirectoryEntry>& entries);

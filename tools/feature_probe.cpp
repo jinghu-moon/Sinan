@@ -11,13 +11,13 @@
 #include <iostream>
 #include <set>
 
-namespace tabtail {
+namespace sinan {
 void pump(DWORD duration){auto end=GetTickCount64()+duration;while(GetTickCount64()<end){MSG m{};while(PeekMessageW(&m,nullptr,0,0,PM_REMOVE)){TranslateMessage(&m);DispatchMessageW(&m);}Sleep(10);}}
 
 HRESULT exercise(const NativeTab& tab,uint32_t operation,const fs::path& target={}) {
-    auto module=LoadLibraryExW((executable_path().parent_path()/L"tabtail-exercise.dll").c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);
+    auto module=LoadLibraryExW((executable_path().parent_path()/L"sinan-exercise.dll").c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);
     if(!module)throw Error(1,"Missing exercise DLL");
-    auto thread=GetWindowThreadProcessId(tab.window,nullptr);auto hook=SetWindowsHookExW(WH_CALLWNDPROC,reinterpret_cast<HOOKPROC>(GetProcAddress(module,"TabTailExerciseHook")),module,thread);
+    auto thread=GetWindowThreadProcessId(tab.window,nullptr);auto hook=SetWindowsHookExW(WH_CALLWNDPROC,reinterpret_cast<HOOKPROC>(GetProcAddress(module,"SinanExerciseHook")),module,thread);
     if(!hook){FreeLibrary(module);throw Error(1,"Cannot attach exercise hook");}
     auto nonce=GetTickCount64();auto sender=GetCurrentProcessId();
     PSECURITY_DESCRIPTOR descriptor{};auto sddl=L"D:P(A;;GA;;;"+current_sid()+L")";ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.c_str(),SDDL_REVISION_1,&descriptor,nullptr);
@@ -29,13 +29,13 @@ HRESULT exercise(const NativeTab& tab,uint32_t operation,const fs::path& target=
 }
 }
 int main(int argc,char** argv) {
-    using namespace tabtail;Json report=Json::object();std::vector<NativeTab> created;
+    using namespace sinan;Json report=Json::object();std::vector<NativeTab> created;
     try {
         ShellTabEnumerator enumerator;auto root=executable_path().parent_path();auto scan=enumerator.scan();
         if(argc>1&&std::string(argv[1])=="title-diagnostics") {
             auto target=std::find_if(scan.tabs.begin(),scan.tabs.end(),[](auto& t){return t.native.has_value();});
             if(target==scan.tabs.end())throw Error(5,"No observed native tab for read-only title diagnostics");auto tab=*target->native;
-            auto conflicts=conflicting_title_modules(tab.process_id,root/L"tabtail-hook.dll");report["conflicting_modules"]=Json::array();for(auto& path:conflicts)report["conflicting_modules"].push_back(utf8(path.wstring()));
+            auto conflicts=conflicting_title_modules(tab.process_id,root/L"sinan-hook.dll");report["conflicting_modules"]=Json::array();for(auto& path:conflicts)report["conflicting_modules"].push_back(utf8(path.wstring()));
             if(conflicts.empty())throw Error(5,"No foreign module present to exercise conflict diagnostic");
             try{send_title_request(tab,BridgeAction::apply);throw Error(5,"Foreign title module was not rejected");}catch(const Error& ex){if(std::string(ex.what()).find(utf8(conflicts.front().wstring()))==std::string::npos)throw;report["apply_rejected_before_injection"]=ex.what();}
             report["probe_title"]=utf8(send_title_request(tab,BridgeAction::probe).title);report["probe_protocol"]=BridgePacket{}.version;
@@ -43,17 +43,17 @@ int main(int argc,char** argv) {
         }
         bool docking=argc>1&&std::string(argv[1])=="docking";
         bool isolated=argc>1&&(std::string(argv[1])=="isolated"||docking);std::optional<NativeTab> isolated_anchor;
-        if(isolated){auto folder=root/L"TabTail-acceptance-anchor";fs::create_directories(folder);wchar_t windows[32768]{};GetWindowsDirectoryW(windows,32768);fs::path exe=fs::path(windows)/L"explorer.exe";UserProcessLauncher launcher;auto child=launcher.launch(exe,quote_argument(exe.wstring())+L" /separate,/n,"+quote_argument(folder.wstring()));
+        if(isolated){auto folder=root/L"Sinan-acceptance-anchor";fs::create_directories(folder);wchar_t windows[32768]{};GetWindowsDirectoryW(windows,32768);fs::path exe=fs::path(windows)/L"explorer.exe";UserProcessLauncher launcher;auto child=launcher.launch(exe,quote_argument(exe.wstring())+L" /separate,/n,"+quote_argument(folder.wstring()));
             for(int retry=0;retry<80&&!isolated_anchor;++retry){pump(100);scan=enumerator.scan();for(auto& t:scan.tabs)if(t.native&&t.location.filesystem_path&&*t.location.filesystem_path==folder.wstring()){isolated_anchor=*t.native;break;}}
             if(!isolated_anchor)throw Error(5,"Isolated acceptance window was not observed");report["isolated_pid"]=isolated_anchor->process_id;
         }
         auto it=std::find_if(scan.tabs.begin(),scan.tabs.end(),[](auto& t){return t.native.has_value();});
         if(it==scan.tabs.end())throw Error(3,"Open an Explorer window first");auto anchor=isolated_anchor?*isolated_anchor:*it->native;
         pump(500);for(auto& t:enumerator.scan().tabs)if(t.native&&t.location.filesystem_path) {
-            fs::path path(*t.location.filesystem_path);if((!isolated_anchor||t.native->guid!=isolated_anchor->guid)&&path.parent_path()==root&&path.filename().wstring().starts_with(L"TabTail-acceptance-"))exercise(*t.native,1);
+            fs::path path(*t.location.filesystem_path);if((!isolated_anchor||t.native->guid!=isolated_anchor->guid)&&path.parent_path()==root&&path.filename().wstring().starts_with(L"Sinan-acceptance-"))exercise(*t.native,1);
         }
         if(argc>1&&std::string(argv[1])=="cleanup"){std::cout<<"{}\n";return 0;}
-        auto first=root/(L"TabTail-acceptance-"+std::to_wstring(GetCurrentProcessId()));auto second=root/(first.filename().wstring()+L"-destination");
+        auto first=root/(L"Sinan-acceptance-"+std::to_wstring(GetCurrentProcessId()));auto second=root/(first.filename().wstring()+L"-destination");
         fs::create_directories(first);fs::create_directories(second);
         auto opened=send_feature_request(anchor,FeatureAction::open,{{"path",utf8(first.wstring())}});
         auto find=[&](std::string guid){for(int i=0;i<20;++i){auto s=read_native_tabs(anchor.window,anchor.process_id,anchor.process_started);for(auto& t:s)if(guid_text(t.guid)==guid)return t;MSG m{};while(PeekMessageW(&m,nullptr,0,0,PM_REMOVE)){TranslateMessage(&m);DispatchMessageW(&m);}Sleep(100);}throw Error(5,"Test tab not observed");};
@@ -78,7 +78,7 @@ int main(int argc,char** argv) {
             report["reverse"]=send_feature_request(anchor,FeatureAction::reorder,{{"expected",before},{"order",reversed}});
             pump(300);report["after"]=order();
             report["restore_order"]=send_feature_request(anchor,FeatureAction::reorder,{{"expected",reversed},{"order",before}});
-            auto extra_path=root/L"TabTail-acceptance-extra";fs::create_directories(extra_path);auto fourth=send_feature_request(anchor,FeatureAction::open,{{"path",utf8(extra_path.wstring())}});auto extra=find(fourth.at("opened_guid"));created.push_back(extra);pump(300);
+            auto extra_path=root/L"Sinan-acceptance-extra";fs::create_directories(extra_path);auto fourth=send_feature_request(anchor,FeatureAction::open,{{"path",utf8(extra_path.wstring())}});auto extra=find(fourth.at("opened_guid"));created.push_back(extra);pump(300);
             Config c;c.enabled=true;c.features["tab_style"]["pinned"]=Json::object();c.features["tab_style"]["locked"]=Json::object();c.features["tab_behavior"]["pinned_position"]="left";
             ShellTabScan observation;
             for(int retry=0;retry<40;++retry){observation=enumerator.scan(true);std::erase_if(observation.tabs,[&](auto& t){return !t.native||t.native->window!=anchor.window;});std::set<std::string> identities;for(auto& t:observation.tabs)identities.insert(guid_text(t.native->guid));if(identities.contains(guid_text(anchor.guid))&&identities.contains(guid_text(tab.guid))&&identities.contains(guid_text(other.guid))&&identities.contains(guid_text(extra.guid)))break;pump(100);}

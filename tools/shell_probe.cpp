@@ -5,7 +5,7 @@
 #include <exdisp.h>
 
 int main() {
-    using namespace tabtail;
+    using namespace sinan;
     try {
         ShellTabEnumerator enumerator;
         Microsoft::WRL::ComPtr<IShellWindows> collection;

@@ -6,7 +6,7 @@
 #define WIN32_LEAN_AND_MEAN
 #include <Windows.h>
 
-namespace tabtail {
+namespace sinan {
 namespace {
 [[noreturn]] void invalid(const char* text){throw PolicyError(PolicyErrorCode::invalid_argument,text);}
 std::wstring normalize(std::wstring_view input) {

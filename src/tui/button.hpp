@@ -5,7 +5,7 @@
 #include <ftxui/component/mouse.hpp>
 #include <ftxui/screen/string.hpp>
 
-namespace tabtail {
+namespace sinan {
 enum class ButtonRole { normal, primary, danger };
 
 // One focusable control owns the complete filled rectangle, including padding.

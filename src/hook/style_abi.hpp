@@ -2,7 +2,7 @@
 #include <inspectable.h>
 // Public interfaces from Microsoft.UI.Xaml.winmd. ABI prefixes include every
 // method preceding the methods used here. QI failure disables only that style.
-namespace tabtail::style {
+namespace sinan::style {
 MIDL_INTERFACE("82A4CD9E-435E-5AEB-8C4F-300CECE45CAE") IXamlReader : public IInspectable {
     virtual HRESULT STDMETHODCALLTYPE Load(HSTRING,IInspectable**) = 0;
     virtual HRESULT STDMETHODCALLTYPE LoadWithInitialTemplateValidation(HSTRING,IInspectable**) = 0;

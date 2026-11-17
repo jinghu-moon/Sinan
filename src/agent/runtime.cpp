@@ -1,4 +1,5 @@
 #include "agent/runtime.hpp"
+#include "ipc/pipe.hpp"
 #include "agent/tab_tracker.hpp"
 #include "agent/layout_tracker.hpp"
 #include "agent/features.hpp"
@@ -9,7 +10,7 @@
 #include <algorithm>
 #include <limits>
 
-namespace tabtail {
+namespace sinan {
 namespace {
 std::string new_runtime_id() {
     GUID guid{}; if (FAILED(CoCreateGuid(&guid))) throw Error(1, "无法生成代理运行期 ID");
@@ -17,15 +18,7 @@ std::string new_runtime_id() {
     std::wstring token(text + 1, text + 37);
     return utf8(token);
 }
-Json required(const fs::path& root, Json request) {
-    auto response = agent_request(root, std::move(request));
-    if (!response) throw Error(3, "标签观察代理未运行；请先执行 tabtail agent start。");
-    return *response;
-}
-void check(const Json& response) {
-    auto code = response.at("code").get<int>();
-    if (code) throw Error(code, response.at("result").value("message", "代理请求失败"));
-}
+
 }
 int run_observer_agent(const fs::path& root) {
     auto endpoint = agent_endpoint(root);
@@ -107,8 +100,8 @@ int run_observer_agent(const fs::path& root) {
     };
     scan();
     auto status = [&]() {
-        return Json{{"running", true}, {"pid", GetCurrentProcessId()}, {"runtime_id", runtime_id}, {"mode", active ? "customize" : "observe"},
-            {"version", TABTAIL_VERSION}, {"data_directory", utf8(root.wstring())}, {"config_revision", config.revision},
+        return Json{{"running", true}, {"pid", GetCurrentProcessId()}, {"executable",utf8(executable_path().wstring())}, {"runtime_id", runtime_id}, {"mode", active ? "customize" : "observe"},
+            {"version", SINAN_VERSION}, {"data_directory", utf8(root.wstring())}, {"config_revision", config.revision},
             {"directory_shortcuts",directory_shortcuts.status()},{"last_directory_open",last_directory_open},{"automatic_restore",automatic_restore},{"features",feature_state},{"shortcuts",shortcuts.status()},{"notifications",notifications.status()},{"layout",layout_state},
             {"hook_available", native_build_supported()}, {"runtime_applied", scan_complete && scan_error.empty() && config_error.empty() && application.value("runtime_applied", false)}, {"application", application}, {"scan_complete", scan_complete},
             {"scan_error", scan_error}, {"config_error", config_error}, {"warnings", warnings},
@@ -147,7 +140,7 @@ int run_observer_agent(const fs::path& root) {
         if(command=="directories.open")return last_directory_open=open_directory(request.at("id").get<std::string>(),reinterpret_cast<HWND>(request.value("foreground",uint64_t{})));
         if (command == "stop") {
             active = false; synchronize(); stopping = true;
-            return {{"stopping", true},{"partial",!feature_state.value("complete",false)||!application.value("complete",false)||!layout_state.value("complete",false)}, {"pid", GetCurrentProcessId()}, {"runtime_id", runtime_id}, {"restoration", application},{"feature_restoration",feature_state},{"layout_restoration",layout_state}};
+            return {{"stopping", true},{"partial",!feature_state.value("complete",false)||!application.value("complete",false)||!layout_state.value("complete",false)}, {"pid", GetCurrentProcessId()}, {"executable",utf8(executable_path().wstring())}, {"runtime_id", runtime_id}, {"restoration", application},{"feature_restoration",feature_state},{"layout_restoration",layout_state}};
         }
         if (command == "enable" || command == "disable") {
             if(command=="disable")startup_restore_pending=false;
@@ -307,56 +300,5 @@ int run_observer_agent(const fs::path& root) {
         if (!stopping && GetTickCount64() - last_scan >= 2000) { reload(); scan(); synchronize(); }
     }
     return 0;
-}
-Json observer_status(const fs::path& root) {
-    auto response = agent_request(root, {{"command", "status"}});
-    if (!response) return {{"running", false}, {"mode", "observe"}, {"hook_available", false}};
-    check(*response);
-    return response->at("result");
-}
-Json start_observer_agent(const fs::path& root) {
-    auto prior = observer_status(root);
-    if (prior.value("running", false)) { prior["message"] = "标签代理已运行。"; return prior; }
-    // Validate configuration before spawning a background process.
-    ConfigStore(root).load();
-    auto exe = executable_path();
-    auto command = quote_argument(exe.wstring()) + L" --data-dir " + quote_argument(root.wstring()) + L" agent run";
-    STARTUPINFOW startup{sizeof(startup)}; PROCESS_INFORMATION raw{};
-    if (!CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW, nullptr, exe.parent_path().c_str(), &startup, &raw))
-        throw Error(1, system_error("启动标签观察代理"));
-    Handle process(raw.hProcess), thread(raw.hThread);
-    auto deadline = GetTickCount64() + 12000;
-    while (GetTickCount64() < deadline) {
-        try {
-            auto result = observer_status(root);
-            if (result.value("running", false)) {
-                result["message"] = "标签观察代理已启动；执行 tabtail start 启用真实标题定制。";
-                return result;
-            }
-        } catch (const Error& e) { if (e.code == 4) throw; }
-        if (WaitForSingleObject(process.get(), 100) == WAIT_OBJECT_0) throw Error(1, "标签观察代理启动失败；可执行 agent run 查看错误。");
-    }
-    TerminateProcess(process.get(), 1); WaitForSingleObject(process.get(), 2000);
-    throw Error(5, "标签观察代理启动超时，已终止本次启动的进程。");
-}
-Json stop_observer_agent(const fs::path& root) {
-    auto before = agent_request(root, {{"command", "status"}});
-    if (!before) return {{"stopped", true}, {"message", "标签观察代理未运行。"}};
-    check(*before);
-    auto pid = before->at("result").at("pid").get<DWORD>();
-    Handle process(OpenProcess(SYNCHRONIZE | PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
-    if (!process) throw Error(4, system_error("等待代理退出"));
-    verify_peer_process(pid);
-    auto response = required(root, {{"command", "stop"}}); check(response);
-    if (response.at("result").value("runtime_id", "") != before->at("result").value("runtime_id", ""))
-        throw Error(5, "代理在停止期间重启，请检查状态");
-    if (WaitForSingleObject(process.get(), 6000) != WAIT_OBJECT_0) throw Error(5, "代理退出超时；未强制结束进程");
-    auto feature_restore=response.at("result").value("feature_restoration",Json::object());
-    return {{"stopped",true},{"feature_restoration",feature_restore},{"restoration",response.at("result").at("restoration")},{"complete",feature_restore.value("complete",false)},{"message",feature_restore.value("complete",false)?"代理已停止，保护与外观已恢复。":"代理已停止；部分恢复未确认，失效租约将继续解除限制。"}};
-}
-Json require_agent_result(const fs::path& root, Json request, int& result_code) {
-    auto response = required(root, std::move(request));
-    result_code = response.at("code").get<int>();
-    return response.at("result");
 }
 }

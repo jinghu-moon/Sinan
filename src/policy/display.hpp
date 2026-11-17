@@ -5,7 +5,7 @@
 #include <string>
 #include <vector>
 
-namespace tabtail {
+namespace sinan {
 enum class PolicyErrorCode { invalid_argument, unknown_tab, retired_identity, stale_update, counter_exhausted };
 class PolicyError : public std::runtime_error {
     PolicyErrorCode code_;

@@ -6,7 +6,7 @@
 #include <sstream>
 #include <iomanip>
 
-namespace tabtail::compat {
+namespace sinan::compat {
 namespace {
 template<class T> T value(std::string_view data, size_t offset) {
     if(offset > data.size() || sizeof(T) > data.size()-offset) throw Error(3,"Truncated PE image");

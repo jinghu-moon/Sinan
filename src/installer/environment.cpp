@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <cwctype>
 
-namespace tabtail {
+namespace sinan {
 namespace {
 struct Key { HKEY value = nullptr; ~Key() { if (value) RegCloseKey(value); } };
 void check(LSTATUS result, std::string_view action) {

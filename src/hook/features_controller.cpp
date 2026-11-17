@@ -5,7 +5,7 @@
 #include <sddl.h>
 #include <atomic>
 
-namespace tabtail {
+namespace sinan {
 Json send_feature_request(const NativeTab& tab, FeatureAction action, const Json& payload,bool require_active) {
     auto serialized=payload.dump();
     if(serialized.size()>=sizeof(FeaturePacket::payload))throw Error(2,"Feature request too large");
@@ -14,11 +14,11 @@ Json send_feature_request(const NativeTab& tab, FeatureAction action, const Json
         if (process.pid == tab.process_id && process.created == tab.process_started) allowed = true;
     if (!allowed) throw Error(4, "无法验证功能目标 Explorer 的用户、会话或进程身份");
     if(auto reason=feature_admission_error(*compat::current_profile(),action,payload,require_active);!reason.empty())throw Error(3,reason);
-    auto dll = executable_path().parent_path() / L"tabtail-features.dll";
+    auto dll = executable_path().parent_path() / L"sinan-features.dll";
     auto module = LoadLibraryExW(dll.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!module) throw Error(1, system_error("加载 tabtail-features.dll"));
+    if (!module) throw Error(1, system_error("加载 sinan-features.dll"));
     struct Module { HMODULE value; ~Module() { FreeLibrary(value); } } module_owner{module};
-    auto callback = reinterpret_cast<HOOKPROC>(GetProcAddress(module, "TabTailFeatureHook"));
+    auto callback = reinterpret_cast<HOOKPROC>(GetProcAddress(module, "SinanFeatureHook"));
     if (!callback) throw Error(1, "功能 DLL 缺少桥接导出");
     DWORD pid{}; auto thread = GetWindowThreadProcessId(tab.window, &pid);
     if (pid != tab.process_id) throw Error(4, "功能目标窗口身份已变化");

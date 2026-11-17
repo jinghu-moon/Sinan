@@ -1,6 +1,6 @@
 #pragma once
 #include "policy/tab_registry.hpp"
-namespace tabtail {
+namespace sinan {
 struct Title {
     std::wstring text;
     bool filesystem = false;

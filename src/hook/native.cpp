@@ -7,7 +7,7 @@
 #include <cstring>
 #include <fstream>
 
-namespace tabtail {
+namespace sinan {
 namespace {
 fs::path frame_path() {
     wchar_t path[32768]{}; auto n = GetSystemDirectoryW(path, 32768);

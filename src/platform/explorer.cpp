@@ -8,7 +8,7 @@
 #include <sddl.h>
 #include <vector>
 
-namespace tabtail {
+namespace sinan {
 namespace {
 fs::path system_explorer() {
     std::wstring path(32768, L'\0');
@@ -79,12 +79,12 @@ Json system_diagnostics() {
     std::string build = "unknown";
     if (get_version && get_version(&os) == 0) build = std::to_string(os.dwBuildNumber);
     Json title_conflicts=Json::array();
-    for(auto process:explorer_processes())try{auto modules=conflicting_title_modules(process.pid,executable_path().parent_path()/L"tabtail-hook.dll");if(!modules.empty()){Json paths=Json::array();for(auto& path:modules)paths.push_back(utf8(path.wstring()));title_conflicts.push_back({{"pid",process.pid},{"modules",paths}});}}catch(const std::exception& ex){title_conflicts.push_back({{"pid",process.pid},{"inspection_error",ex.what()}});}
+    for(auto process:explorer_processes())try{auto modules=conflicting_title_modules(process.pid,executable_path().parent_path()/L"sinan-hook.dll");if(!modules.empty()){Json paths=Json::array();for(auto& path:modules)paths.push_back(utf8(path.wstring()));title_conflicts.push_back({{"pid",process.pid},{"modules",paths}});}}catch(const std::exception& ex){title_conflicts.push_back({{"pid",process.pid},{"inspection_error",ex.what()}});}
     return {{"compatibility",compat::status()},{"title_adapter_conflicts",title_conflicts},{"windows_build", build},
         {"explorerframe_version", version(frame)}, {"architecture", "x64"}, {"session_id", session_id()},
         {"explorer", explorer_status()}, {"hook_available", native_build_supported()}, {"runtime_available", native_build_supported()},
         {"explorerframe_sha256", frame_file_hash()}, {"supported_sha256", supported_frame_sha256},
-        {"hook_dll_present", fs::is_regular_file(executable_path().parent_path() / L"tabtail-hook.dll")},
+        {"hook_dll_present", fs::is_regular_file(executable_path().parent_path() / L"sinan-hook.dll")},
         {"message", native_build_supported() ? "标题适配已通过本地校验；start 时仍需校验目标模块、对象布局及标题入口。" : "当前无可用标题适配；可运行 symbols prepare 准备符号，观察与配置仍可用。"}};
 }
 Json restart_explorer(bool force) {

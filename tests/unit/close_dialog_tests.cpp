@@ -2,7 +2,7 @@
 #include "platform/windows.hpp"
 #include <iostream>
 
-using namespace tabtail;
+using namespace sinan;
 namespace {
 int checks=0,choice=IDCANCEL;bool chinese=true,session_end=false,called=false;HRESULT outcome=S_OK;
 void expect(bool value,const char* description){++checks;if(!value)throw std::runtime_error(description);}
@@ -23,7 +23,7 @@ HRESULT WINAPI inspect_dialog(const TASKDIALOGCONFIG* config,int* button,int*,BO
 int main() {
     HMODULE module{};
     try {
-        auto dll=executable_path().parent_path()/L"tabtail-features.dll";
+        auto dll=executable_path().parent_path()/L"sinan-features.dll";
         module=LoadLibraryExW(dll.c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);
         expect(module!=nullptr,"load actual feature DLL without attaching Explorer");
         CloseDialogState state;

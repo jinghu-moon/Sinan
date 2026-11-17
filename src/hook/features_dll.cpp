@@ -18,7 +18,7 @@
 #include <servprov.h>
 #include <array>
 
-namespace tabtail::features {
+namespace sinan::features {
 using Microsoft::WRL::ComPtr;
 HMODULE self{};
 using Remove=HRESULT(WINAPI*)(void*,GUID);
@@ -268,7 +268,7 @@ Json reorder(const NativeTab& tab,const Json& payload,DWORD owner,uint64_t owner
     return {{"requested_order",desired},{"move_requested",true},{"selection_preserved",read<GUID>(tab.frame+native_field("active_guid"))==active},{"moved",moved}};
 }
 void execute(FeaturePacket& p) {
-    verify_layout_sender(self,p.sender_pid,p.sender_started);
+    verify_layout_sender(self,p.sender_pid,p.sender_started,p.action==FeatureAction::inspect);
     auto payload_check=Json::parse(p.payload);
     if(auto reason=feature_admission_error(*compat::current_profile(),p.action,payload_check,p.require_active);!reason.empty())throw Error(3,reason);
     auto tab=locate(p);auto payload=Json::parse(p.payload);
@@ -347,8 +347,8 @@ void protected_process(FeaturePacket* packet) {
     __try{process(packet);}__except(EXCEPTION_EXECUTE_HANDLER){packet->result=E_UNEXPECTED;InterlockedExchange(&packet->completed,1);}
 }
 }
-extern "C" __declspec(dllexport) LRESULT CALLBACK TabTailFeatureHook(int code,WPARAM w,LPARAM l) {
-    using namespace tabtail;
+extern "C" __declspec(dllexport) LRESULT CALLBACK SinanFeatureHook(int code,WPARAM w,LPARAM l) {
+    using namespace sinan;
     if(code>=0){auto m=reinterpret_cast<CWPSTRUCT*>(l);if(m&&m->message==RegisterWindowMessageW(feature_message)) {
         auto sender=static_cast<DWORD>(m->wParam);auto nonce=static_cast<uint64_t>(m->lParam);
         Handle mapping(OpenFileMappingW(FILE_MAP_READ|FILE_MAP_WRITE,FALSE,feature_mapping(sender,nonce).c_str()));
@@ -357,4 +357,4 @@ extern "C" __declspec(dllexport) LRESULT CALLBACK TabTailFeatureHook(int code,WP
     }}
     return CallNextHookEx(nullptr,code,w,l);
 }
-BOOL WINAPI DllMain(HINSTANCE module,DWORD reason,LPVOID){if(reason==DLL_PROCESS_ATTACH)tabtail::features::self=module;return TRUE;}
+BOOL WINAPI DllMain(HINSTANCE module,DWORD reason,LPVOID){if(reason==DLL_PROCESS_ATTACH)sinan::features::self=module;return TRUE;}

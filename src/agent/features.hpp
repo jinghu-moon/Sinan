@@ -4,7 +4,7 @@
 #include "hook/style.hpp"
 #include <map>
 
-namespace tabtail {
+namespace sinan {
 class TabFeatures {
 public:
     using FeatureTransport=std::function<Json(const NativeTab&,FeatureAction,const Json&,bool)>;

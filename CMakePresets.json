@@ -4,7 +4,7 @@
     "name": "windows-msvc",
     "generator": "Visual Studio 17 2022",
     "architecture": "x64",
-    "binaryDir": "${sourceDir}/build/msvc",
+    "binaryDir": "${sourceDir}/build/sinan",
     "cacheVariables": { "BUILD_TESTING": "ON" }
   }],
   "buildPresets": [{"name": "release", "configurePreset": "windows-msvc", "configuration": "Release"}],

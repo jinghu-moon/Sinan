@@ -2,9 +2,9 @@
 #include "config/config.hpp"
 #include "hook/native.hpp"
 
-namespace tabtail {
-inline constexpr wchar_t feature_message[]=L"TabTail.Features.1";
-inline std::wstring feature_mapping(DWORD pid,uint64_t nonce){return L"Local\\TabTail-Features-"+std::to_wstring(pid)+L"-"+std::to_wstring(nonce);}
+namespace sinan {
+inline constexpr wchar_t feature_message[]=L"Sinan.Features.1";
+inline std::wstring feature_mapping(DWORD pid,uint64_t nonce){return L"Local\\Sinan-Features-"+std::to_wstring(pid)+L"-"+std::to_wstring(nonce);}
 enum class FeatureAction:uint32_t { inspect=1, apply=2, restore=3, locate=4, open=5, reorder=6 };
 struct FeaturePacket {
     uint32_t magic=0x54544654,version=1,size=sizeof(FeaturePacket);

@@ -3,7 +3,7 @@
 #include "installer/environment.hpp"
 #include <iostream>
 
-using namespace tabtail;
+using namespace sinan;
 namespace {
 int checks = 0;
 void expect(bool value, const char* message) {
@@ -17,8 +17,8 @@ template<class F> void rejects(F fn, const char* message) {
 }
 }
 int main() {
-    auto temp = fs::temp_directory_path() / (L"TabTail-tests-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()));
-    auto key = L"Software\\TabTailTests\\" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64());
+    auto temp = fs::temp_directory_path() / (L"Sinan-tests-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()));
+    auto key = L"Software\\SinanTests\\" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64());
     try {
         DisplayOptions c;
         expect(format_title(L"D:\\A\\B\\C", c).text == L"B\\C", "depth2");
@@ -62,14 +62,14 @@ int main() {
         rejects([&] { store.update([](Config&) {}); }, "corrupt config");
         expect(read_file(store.path()) == broken, "corrupt config preserved");
         expect(quote_argument(L"C:\\hello world\\") == L"\"C:\\hello world\\\\\"", "argument quoting");
-        expect(path_contains(L"%LOCALAPPDATA%\\TabTail\\bin;D:\\Other", env(L"LOCALAPPDATA") + L"\\TabTail\\bin\\"), "expanded path");
+        expect(path_contains(L"%LOCALAPPDATA%\\Sinan\\bin;D:\\Other", env(L"LOCALAPPDATA") + L"\\Sinan\\bin\\"), "expanded path");
         expect(path_contains(L"\"D:\\HELLO WORLD\\\";D:\\Other", L"d:/hello world"), "quoted path");
         expect(!path_contains(L"D:\\A;D:\\B", L"D:\\AA"), "entry boundaries");
         RegistryValue old{true, REG_EXPAND_SZ, L"%USERPROFILE%\\tools;\"D:\\Original Path\";;D:\\Last;"};
         registry_write(key, L"Path", old);
-        expect(change_user_path(L"D:\\TabTail\\bin", true, key, false).changed, "add path");
-        expect(!change_user_path(L"d:/tabtail/bin/", true, key, false).changed, "idempotent path");
-        expect(change_user_path(L"D:\\TabTail\\bin", false, key, false).changed, "remove path");
+        expect(change_user_path(L"D:\\Sinan\\bin", true, key, false).changed, "add path");
+        expect(!change_user_path(L"d:/sinan/bin/", true, key, false).changed, "idempotent path");
+        expect(change_user_path(L"D:\\Sinan\\bin", false, key, false).changed, "remove path");
         expect(registry_read(key, L"Path") == old, "PATH roundtrip preserves original raw value/type");
         rejects([&] { change_user_path(L"D:\\bad;entry", true, key, false); }, "semicolon rejected");
         RegDeleteTreeW(HKEY_CURRENT_USER, key.c_str());

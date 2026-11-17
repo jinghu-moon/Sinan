@@ -3,7 +3,7 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 
-namespace tabtail {
+namespace sinan {
 using FeatureJson = nlohmann::json;
 struct TabFlags {
     bool pinned=false, protected_tab=false, locked=false;

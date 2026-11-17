@@ -9,7 +9,7 @@ $currentPath = (Resolve-Path -LiteralPath $CurrentExecutable).Path
 $sourcePath = (Resolve-Path -LiteralPath $NewExecutable).Path
 $dataPath = [IO.Path]::GetFullPath($DataDirectory)
 if ($currentPath -eq $sourcePath) { throw 'Select a separate build executable as the update source.' }
-$runtimeNames = @('tabtail-hook.dll', 'tabtail-layout.dll', 'tabtail-features.dll', 'tabtail-style-0.7.dll', 'tabtail-login.exe', 'tabtail-symbols.exe')
+$runtimeNames = @('sinan-hook.dll', 'sinan-layout.dll', 'sinan-features.dll', 'sinan-style.dll', 'sinan-login.exe', 'sinan-symbols.exe', 'sinan-agent.exe')
 foreach ($runtimeName in $runtimeNames) {
     $runtimeSource = Join-Path (Split-Path -Parent $sourcePath) $runtimeName
     $runtimeTarget = Join-Path (Split-Path -Parent $currentPath) $runtimeName
@@ -17,14 +17,14 @@ foreach ($runtimeName in $runtimeNames) {
         if (!(Test-Path -LiteralPath $runtimeTarget -PathType Leaf)) { throw "ExecutableOnly requires compatible $runtimeName." }
     } else {
         if (!(Test-Path -LiteralPath $runtimeSource -PathType Leaf)) { throw "New build is missing $runtimeName." }
-        if ((Test-Path -LiteralPath $runtimeTarget) -and (Get-FileHash -LiteralPath $runtimeTarget).Hash -ne (Get-FileHash -LiteralPath $runtimeSource).Hash) {
+        if ($runtimeName -ne 'sinan-agent.exe' -and (Test-Path -LiteralPath $runtimeTarget) -and (Get-FileHash -LiteralPath $runtimeTarget).Hash -ne (Get-FileHash -LiteralPath $runtimeSource).Hash) {
             throw "$runtimeName differs. Exit processes using it before upgrading; no running process was changed."
         }
     }
 }
 
-# Both IPC and the loaded DLL validate the canonical executable path.
-# Stop through that path, replace only the EXE, then start through the same path.
+# IPC and the bridges validate distribution paths and process roles.
+# Stop the adjacent Agent before replacing either executable.
 $stateText = & $currentPath --data-dir $dataPath agent status --json
 if ($LASTEXITCODE -ne 0) {
     throw "Cannot contact the existing agent. CurrentExecutable must be the exact path that started it: $currentPath"
@@ -56,7 +56,7 @@ if (!$ExecutableOnly) {
     foreach ($runtimeName in $runtimeNames) {
         $runtimeSource = Join-Path (Split-Path -Parent $sourcePath) $runtimeName
         $runtimeTarget = Join-Path (Split-Path -Parent $currentPath) $runtimeName
-        if (!(Test-Path -LiteralPath $runtimeTarget)) { Copy-Item -LiteralPath $runtimeSource -Destination $runtimeTarget }
+        if (!(Test-Path -LiteralPath $runtimeTarget) -or $runtimeName -eq 'sinan-agent.exe') { Copy-Item -LiteralPath $runtimeSource -Destination $runtimeTarget -Force }
     }
 }
 if ($resumeTitles) { & $currentPath --data-dir $dataPath start }

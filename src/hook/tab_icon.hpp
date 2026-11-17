@@ -1,7 +1,7 @@
 #pragma once
 #include <string_view>
 
-namespace tabtail {
+namespace sinan {
 // Geometry from the approved SVG assets. Only validated built-in names and
 // #RRGGBB colors reach XamlReader; user-supplied XAML is never evaluated.
 inline constexpr std::wstring_view pin_geometry=L"M8 2.5h8a1.5 1.5 0 0 1 0 3h-.75v4.25l2.3 2.3a2.4 2.4 0 0 1 .7 1.7V14a1.5 1.5 0 0 1-1.5 1.5h-3.5v4.75a1.25 1.25 0 0 1-2.5 0V15.5h-3.5a1.5 1.5 0 0 1-1.5-1.5v-.25a2.4 2.4 0 0 1 .7-1.7l2.3-2.3V5.5H8a1.5 1.5 0 0 1 0-3Z";

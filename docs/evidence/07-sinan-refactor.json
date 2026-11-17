@@ -1,0 +1,83 @@
+{
+  "product": "Sinan",
+  "version": "0.12.0",
+  "date": "2026-11-18",
+  "baseline": {
+    "commit": "031d810",
+    "tag": "baseline-tabtail-v0.11.0",
+    "ctest_passed": 20,
+    "ctest_total": 20
+  },
+  "tdd_document_commit": "c0dfda2",
+  "red": {
+    "process_contract": "CLI must be the renamed Sinan product",
+    "shared_application": "Rule not found"
+  },
+  "regression": {
+    "full": {
+      "passed": 23,
+      "total": 23
+    },
+    "without_tui": {
+      "passed": 22,
+      "total": 22
+    },
+    "application_assertions": 53,
+    "tui_component_assertions": 1747
+  },
+  "process_and_package": {
+    "independent_agent": true,
+    "idempotent_start": true,
+    "cross_directory_client_rejected": true,
+    "unlisted_same_directory_client_rejected": true,
+    "invalid_product_and_version_rejected": true,
+    "transport_recovers": true,
+    "optional_tui_without_ftxui": true,
+    "clean_install_full_and_headless": true,
+    "runtime_file_count": 8,
+    "role_dependency_graph_checked": true,
+    "dbghelp_winhttp_only_in_symbol_worker": true
+  },
+  "symbols": {
+    "offline": true,
+    "network_used": false,
+    "cache_reused": true,
+    "symbol_count": 29,
+    "modules": {
+      "ExplorerFrame.dll": {
+        "sha256": "4e28d2076608df5525ec1b7b2ed8dc0e866f43bf2ded6a5e4213ccd1c2284cbe",
+        "rva_count": 24,
+        "prepared": true,
+        "reused": true
+      },
+      "FileExplorerExtensions.dll": {
+        "sha256": "abdab68ac72b9b45dbf2001e81232041c78cac4f33ea37db445e43df4919c6a3",
+        "rva_count": 2,
+        "prepared": true,
+        "reused": true
+      },
+      "Windows.UI.FileExplorer.dll": {
+        "sha256": "6753a3b5d1d25564eab5a4e785ce481d03cac83b25606f3c2305a1b4cdbb10ac",
+        "rva_count": 3,
+        "prepared": true,
+        "reused": true
+      }
+    }
+  },
+  "not_performed": [
+    "User Explorer injection, navigation or restart",
+    "Replacement or shutdown of pre-existing user Agent",
+    "Real product PATH installation",
+    "New GUI rendering and visual acceptance",
+    "Real Explorer mouse/keyboard, DPI and theme acceptance"
+  ],
+  "logs": [
+    "build/research/sinan-baseline-ctest.log",
+    "build/research/sinan-red-process.log",
+    "build/research/sinan-red-application.log",
+    "build/research/sinan-ctest.log",
+    "build/research/sinan-headless-ctest.log",
+    "build/research/sinan-offline-symbols.json",
+    "build/research/sinan-offline-reuse.json"
+  ]
+}

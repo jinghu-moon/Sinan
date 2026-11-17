@@ -2,7 +2,7 @@
 #include <wrl/implements.h>
 #include <iostream>
 
-using namespace tabtail;
+using namespace sinan;
 using namespace Microsoft::WRL;
 namespace {
 int checks=0;

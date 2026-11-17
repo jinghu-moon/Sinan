@@ -2,7 +2,7 @@
 #include <algorithm>
 #include <limits>
 
-namespace tabtail {
+namespace sinan {
 namespace {
 void validate_identity(const TabIdentity& identity) {
     if (!identity.process_id || !identity.process_started || !identity.frame_id || !identity.frame_generation || !identity.tab_generation ||

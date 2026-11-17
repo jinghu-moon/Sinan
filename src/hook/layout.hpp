@@ -2,12 +2,12 @@
 #include "config/config.hpp"
 #include "hook/native.hpp"
 
-namespace tabtail {
+namespace sinan {
 // A separate module/protocol lets the layout adapter coexist with a pinned v2
 // title DLL. No need to replace the title DLL in a running Explorer process.
-inline constexpr wchar_t layout_message[] = L"TabTail.LayoutBridge.1";
+inline constexpr wchar_t layout_message[] = L"Sinan.LayoutBridge.1";
 inline std::wstring layout_mapping(DWORD pid, uint64_t nonce) {
-    return L"Local\\TabTail-Layout-" + std::to_wstring(pid) + L"-" + std::to_wstring(nonce);
+    return L"Local\\Sinan-Layout-" + std::to_wstring(pid) + L"-" + std::to_wstring(nonce);
 }
 enum class LayoutAction : uint32_t { apply = 1, restore = 2, inspect = 3 };
 struct LayoutPacket {

@@ -5,7 +5,7 @@
 #include <limits>
 #include <set>
 
-namespace tabtail {
+namespace sinan {
 namespace {
 Json depth_json(std::optional<int> depth) { return depth ? Json(*depth) : Json("all"); }
 uint64_t next_sequence(uint64_t previous) {

@@ -7,7 +7,7 @@
 #include <cstring>
 #include <vector>
 
-namespace tabtail {
+namespace sinan {
 namespace {
 constexpr uint32_t max_message = 1024 * 1024;
 class Operation {
@@ -75,9 +75,9 @@ std::wstring agent_endpoint(const fs::path& root) {
     constexpr wchar_t hex[] = L"0123456789abcdef";
     std::wstring hash;
     for (auto byte : digest) { hash += hex[byte >> 4]; hash += hex[byte & 15]; }
-    return L"\\\\.\\pipe\\TabTail-" + current_sid() + L"-" + std::to_wstring(session_id()) + L"-" + hash;
+    return L"\\\\.\\pipe\\Sinan-" + current_sid() + L"-" + std::to_wstring(session_id()) + L"-" + hash;
 }
-void verify_peer_process(DWORD pid) {
+void verify_peer_process(DWORD pid,PeerRole role) {
     DWORD session = 0;
     if (!ProcessIdToSessionId(pid, &session) || session != session_id()) throw Error(4, "代理对端不属于当前会话");
     Handle process(OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid));
@@ -85,8 +85,12 @@ void verify_peer_process(DWORD pid) {
     std::wstring image(32768, L'\0'); DWORD size = static_cast<DWORD>(image.size());
     if (!QueryFullProcessImageNameW(process.get(), 0, image.data(), &size)) throw Error(4, system_error("查询 IPC 对端映像"));
     image.resize(size);
-    std::error_code ec;
-    if (!fs::equivalent(fs::path(image), executable_path(), ec) || ec) throw Error(4, "IPC 对端不是同一 TabTail 可执行文件，请使用启动代理的命令路径");
+    auto directory=executable_path().parent_path();
+    auto matches=[&](const wchar_t* name){std::error_code ec;return fs::equivalent(fs::path(image),directory/name,ec)&&!ec;};
+    // In-process loopback allows transport tests without weakening cross-process roles.
+    bool allowed=pid==GetCurrentProcessId() || (role==PeerRole::agent ? matches(L"sinan-agent.exe") :
+        matches(L"sinan.exe")||matches(L"sinan-panel.exe"));
+    if(!allowed)throw Error(4,"IPC peer has the wrong role or distribution directory");
     HANDLE raw = nullptr;
     if (!OpenProcessToken(process.get(), TOKEN_QUERY, &raw)) throw Error(4, system_error("查询 IPC 对端用户"));
     Handle token(raw); DWORD bytes = 0; GetTokenInformation(token.get(), TokenUser, nullptr, 0, &bytes);
@@ -119,13 +123,13 @@ std::optional<Json> agent_request(const fs::path& root, Json request, DWORD time
     verify_peer_process(server);
     GUID guid{}; if (FAILED(CoCreateGuid(&guid))) throw Error(1, "无法创建请求 ID");
     wchar_t id[40]{}; StringFromGUID2(guid, id, 40);
-    request["request_id"] = utf8(id); request["protocol_version"] = 1;
+    request["request_id"] = utf8(id); request["protocol_version"] = 1; request["product"]="Sinan";
     auto deadline = GetTickCount64() + timeout;
     send_json(pipe.get(), request, deadline);
     auto response = receive_json(pipe.get(), deadline);
     // Server waits for this receipt before disconnecting, so unread response bytes are never discarded.
     BYTE receipt = 1; transfer(pipe.get(), &receipt, sizeof(receipt), true, deadline);
-    if (response.value("protocol_version", 0) != 1 || response.value("request_id", "") != request.at("request_id").get<std::string>())
+    if (response.value("product",std::string{})!="Sinan" || response.value("protocol_version", 0) != 1 || response.value("request_id", "") != request.at("request_id").get<std::string>())
         throw Error(1, "代理响应协议或请求 ID 不匹配");
     if (!response.contains("code") || !response["code"].is_number_integer() || !response.contains("result") || !response["result"].is_object())
         throw Error(1, "代理响应结构无效");
@@ -169,13 +173,13 @@ bool PipeServer::poll(const std::function<Json(const Json&)>& handler, DWORD wai
     try {
         ULONG client = 0;
         if (!GetNamedPipeClientProcessId(state.pipe.get(), &client)) throw Error(4, "无法验证客户端身份");
-        verify_peer_process(client);
+        verify_peer_process(client,PeerRole::client);
         auto deadline = GetTickCount64() + 5000;
         auto request = receive_json(state.pipe.get(), deadline);
         auto command=request.value("command",std::string{});if(command=="workspace.restore"||command=="tabs.batch")deadline=GetTickCount64()+45000;
-        Json response{{"protocol_version", 1}, {"request_id", request.value("request_id", "")}};
+        Json response{{"product","Sinan"},{"protocol_version", 1}, {"request_id", request.value("request_id", "")}};
         try {
-            if (request.value("protocol_version", 0) != 1 || response["request_id"] == "") throw Error(2, "请求协议无效");
+            if (request.value("product",std::string{})!="Sinan" || request.value("protocol_version", 0) != 1 || response["request_id"] == "") throw Error(2, "请求协议无效");
             response["result"] = handler(request);
             const auto& result=response["result"];
             bool observing_reload=command=="reload"&&request.value("config_only",false)&&result.value("config_received",false)&&result.value("mode",std::string{})=="observe";

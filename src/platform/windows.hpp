@@ -6,7 +6,7 @@
 #include <string>
 #include <string_view>
 
-namespace tabtail {
+namespace sinan {
 namespace fs = std::filesystem;
 struct Error : std::runtime_error {
     int code;

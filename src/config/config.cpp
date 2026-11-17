@@ -5,7 +5,7 @@
 #include <limits>
 #include <sstream>
 
-namespace tabtail {
+namespace sinan {
 std::optional<int> parse_depth(std::string_view text) {
     if (text == "all") return std::nullopt;
     int value = 0;
@@ -199,11 +199,11 @@ Config ConfigStore::update(const std::function<void(Config&)>& edit) const {
     if(fs::exists(path())) {
         auto bytes=read_file(path());auto old=toml::parse(bytes);
         if(old["schema_version"].value_or(0)<4) {
-            auto backup=root_/L"tabtail.pre-schema4.toml";
+            auto backup=root_/L"sinan.pre-schema4.toml";
             if(!fs::exists(backup))atomic_write(backup,bytes);
         }
         if(old["schema_version"].value_or(0)<3) {
-            auto backup=root_/L"tabtail.pre-schema3.toml";
+            auto backup=root_/L"sinan.pre-schema3.toml";
             if(!fs::exists(backup))atomic_write(backup,bytes);
         }
     }

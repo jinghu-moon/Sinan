@@ -3,10 +3,10 @@
 #include <cstdint>
 #include <string>
 
-namespace tabtail {
-inline constexpr wchar_t bridge_message_name[] = L"TabTail.TitleBridge.3";
+namespace sinan {
+inline constexpr wchar_t bridge_message_name[] = L"Sinan.TitleBridge.3";
 inline std::wstring bridge_mapping_name(DWORD sender, uint64_t nonce) {
-    return L"Local\\TabTail-Bridge3-" + std::to_wstring(sender) + L"-" + std::to_wstring(nonce);
+    return L"Local\\Sinan-Bridge3-" + std::to_wstring(sender) + L"-" + std::to_wstring(nonce);
 }
 enum class BridgeAction : uint32_t { probe = 1, apply = 2, restore = 3 };
 struct BridgePacket {

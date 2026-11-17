@@ -2,10 +2,10 @@
 #include "platform/shell_tabs.hpp"
 #include <iostream>
 
-// Developer probe. Copy alongside tabtail-layout.dll as tabtail.exe in an
+// Developer probe. Copy alongside sinan-layout.dll as sinan-agent.exe in an
 // isolated folder to satisfy the same client identity validation as the CLI.
 int main(int argc,char** argv) {
-    using namespace tabtail;
+    using namespace sinan;
     try {
         ShellTabEnumerator enumerator;auto scan=enumerator.scan();
         auto found=std::find_if(scan.tabs.begin(),scan.tabs.end(),[](const auto& tab){return tab.native.has_value();});

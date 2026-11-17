@@ -1,12 +1,12 @@
 #include "compat/symbols.hpp"
 
-namespace tabtail::compat {
+namespace sinan::compat {
 Json prepare(const fs::path& cache,bool offline,bool force){
     fs::create_directories(cache);
     auto result_path=fs::absolute(cache)/(L"result-"+std::to_wstring(GetCurrentProcessId())+L"-"+std::to_wstring(GetTickCount64())+L".json");
     struct Cleanup{fs::path file;~Cleanup(){std::error_code ec;fs::remove(file,ec);}} cleanup{result_path};
-    auto helper=executable_path().parent_path()/L"tabtail-symbols.exe";
-    if(!fs::is_regular_file(helper))throw Error(1,"分发目录缺少 tabtail-symbols.exe；请保留配套文件");
+    auto helper=executable_path().parent_path()/L"sinan-symbols.exe";
+    if(!fs::is_regular_file(helper))throw Error(1,"分发目录缺少 sinan-symbols.exe；请保留配套文件");
     std::wstring command=quote_argument(helper.wstring())+L" --cache-dir "+quote_argument(fs::absolute(cache).wstring())+L" --result "+quote_argument(result_path.wstring());
     if(offline)command+=L" --offline";if(force)command+=L" --force";
     Handle job(CreateJobObjectW(nullptr,nullptr));if(!job)throw Error(1,system_error("Create symbol worker job"));

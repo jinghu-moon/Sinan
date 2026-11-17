@@ -1,6 +1,6 @@
 #pragma once
 #include "config/config.hpp"
-namespace tabtail {
+namespace sinan {
 Json save_workspace(const fs::path& root,const Json& tabs,int limit);
 Json load_workspace(const fs::path& root,int limit);
 bool workspace_directory_available(const std::wstring& path,DWORD timeout_ms=800);

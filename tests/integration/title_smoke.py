@@ -1,6 +1,6 @@
 """Opt-in live Explorer test. Copies binaries because the hook DLL stays loaded.
 
-python tests/integration/title_smoke.py build/msvc/Release/tabtail.exe --apply
+python tests/integration/title_smoke.py build/msvc/Release/sinan.exe --apply
 Does not navigate, close tabs, restart Explorer, install, or change user PATH.
 """
 import argparse
@@ -19,9 +19,9 @@ args = parser.parse_args()
 source = args.executable.resolve()
 directory = Path(__file__).resolve().parents[2] / "build" / "title-smoke" / uuid.uuid4().hex
 directory.mkdir(parents=True)
-for name in ("tabtail.exe", "tabtail-hook.dll"):
+for name in ("sinan.exe", "sinan-hook.dll"):
     shutil.copy2(source.parent / name, directory / name)
-exe = directory / "tabtail.exe"
+exe = directory / "sinan.exe"
 root = directory / "data"
 
 

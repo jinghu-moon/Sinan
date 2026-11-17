@@ -3,7 +3,7 @@
 
 #pragma comment(linker,"/manifestdependency:\"type='win32' name='Microsoft.Windows.Common-Controls' version='6.0.0.0' processorArchitecture='amd64' publicKeyToken='6595b64144ccf1df' language='*'\"")
 
-namespace tabtail {
+namespace sinan {
 namespace {
 HRESULT CALLBACK dialog_callback(HWND window,UINT message,WPARAM,LPARAM,LONG_PTR data) {
     auto& state=*reinterpret_cast<CloseDialogState*>(data);
@@ -39,7 +39,7 @@ bool confirm_window_close(HWND owner,HMODULE module,std::string_view language,Cl
     TASKDIALOGCONFIG config{sizeof(config)};
     config.hwndParent=owner;config.hInstance=module;
     config.dwFlags=TDF_ALLOW_DIALOG_CANCELLATION|TDF_POSITION_RELATIVE_TO_WINDOW|TDF_SIZE_TO_CONTENT;
-    config.pszWindowTitle=L"TabTail";
+    config.pszWindowTitle=L"Sinan";
     config.pszMainInstruction=chinese?L"关闭此资源管理器窗口？":L"Close this File Explorer window?";
     config.pszContent=chinese?L"此窗口包含固定或受保护的标签。关闭整个窗口将同时关闭其中的所有标签。":L"This window contains pinned or protected tabs. Closing the window will close all of its tabs.";
     config.cButtons=ARRAYSIZE(buttons);config.pButtons=buttons;config.nDefaultButton=IDCANCEL;

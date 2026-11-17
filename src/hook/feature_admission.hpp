@@ -2,7 +2,7 @@
 #include "hook/features.hpp"
 #include "compat/symbols.hpp"
 
-namespace tabtail {
+namespace sinan {
 // Shared by sender and injected receiver. No whole-feature SHA gate.
 inline std::string feature_admission_error(const compat::Profile& p,FeatureAction action,const Json& payload,bool require_active){
     if(!p.inventory)return "Native inventory unavailable: "+p.reason;

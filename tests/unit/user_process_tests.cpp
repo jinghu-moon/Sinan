@@ -3,7 +3,7 @@
 #include <iostream>
 #include <vector>
 
-using namespace tabtail;
+using namespace sinan;
 int wmain(int argc, wchar_t** argv) {
     if (argc == 2 && std::wstring_view(argv[1]) == L"--child") return 0;
     try {

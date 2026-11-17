@@ -6,14 +6,14 @@
 #include <cstring>
 #include <tlhelp32.h>
 
-namespace tabtail {
+namespace sinan {
 std::vector<fs::path> conflicting_title_modules(DWORD pid,const fs::path& expected) {
     Handle snapshot(CreateToolhelp32Snapshot(TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,pid));
     if(!snapshot)throw Error(4,system_error("检查 Explorer 标题适配器"));
     MODULEENTRY32W entry{sizeof(entry)};std::vector<fs::path> conflicts;
     if(!Module32FirstW(snapshot.get(),&entry))throw Error(4,system_error("读取 Explorer 已加载模块"));
     do {
-        if(_wcsicmp(entry.szModule,L"tabtail-hook.dll")!=0)continue;
+        if(_wcsicmp(entry.szModule,L"sinan-hook.dll")!=0)continue;
         std::error_code ec;
         if(!fs::equivalent(fs::path(entry.szExePath),expected,ec)||ec)conflicts.emplace_back(entry.szExePath);
     }while(Module32NextW(snapshot.get(),&entry));
@@ -31,20 +31,20 @@ BridgeResult send_title_request(const NativeTab& tab, BridgeAction action, const
         throw Error(4, "无法验证目标 Explorer 的用户、会话或进程身份");
     }
     if (!native_build_supported()) throw Error(3, "当前 ExplorerFrame 无标题适配");
-    auto dll = executable_path().parent_path() / L"tabtail-hook.dll";
+    auto dll = executable_path().parent_path() / L"sinan-hook.dll";
     if(action==BridgeAction::apply) {
         auto conflicts=conflicting_title_modules(tab.process_id,dll);
         if(!conflicts.empty()) {
-            std::string message="Explorer 中仍加载着其他路径的 TabTail 标题钩子：";
+            std::string message="Explorer 中仍加载着其他路径的 Sinan 标题钩子：";
             for(auto& path:conflicts)message+="\n"+utf8(path.wstring());
             message+="\n请先用旧代理原路径停止代理，再重启 Explorer 释放驻留钩子，最后启动新版。";
             throw Error(3,message);
         }
     }
     HMODULE module = LoadLibraryExW(dll.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!module) throw Error(1, system_error("加载 tabtail-hook.dll"));
+    if (!module) throw Error(1, system_error("加载 sinan-hook.dll"));
     struct Module { HMODULE value; ~Module() { FreeLibrary(value); } } module_owner{module};
-    auto callback = reinterpret_cast<HOOKPROC>(GetProcAddress(module, "TabTailWindowHook"));
+    auto callback = reinterpret_cast<HOOKPROC>(GetProcAddress(module, "SinanWindowHook"));
     if (!callback) throw Error(1, "标题 DLL 缺少桥接导出");
     DWORD pid{}; auto thread = GetWindowThreadProcessId(tab.window, &pid);
     if (pid != tab.process_id) throw Error(4, "目标窗口身份已变化");

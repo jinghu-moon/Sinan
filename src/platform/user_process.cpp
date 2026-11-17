@@ -4,7 +4,7 @@
 #include <userenv.h>
 #include <vector>
 
-namespace tabtail {
+namespace sinan {
 namespace {
 bool is_elevated(HANDLE token) {
     TOKEN_ELEVATION elevation{}; DWORD bytes = 0;

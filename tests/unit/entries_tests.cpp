@@ -2,35 +2,36 @@
 #include "policy/entries.hpp"
 #include "formatter/formatter.hpp"
 #include "agent/interaction.hpp"
+#include "ui/shortcut_recorder.hpp"
 #include "hook/controller.hpp"
 #include <iostream>
-using namespace tabtail;
+using namespace sinan;
 namespace {
 int checks{};
 void expect(bool ok,const char* text){++checks;if(!ok)throw std::runtime_error(text);}
 template<class F>void rejects(F f){bool rejected=false;try{f();}catch(...){rejected=true;}expect(rejected,"invalid entry accepted");}
 }
 int main(){try{
-    DirectoryEntry entry{"work",L"工作",L"D:\\Projects\\TabTail","Ctrl+Alt+1",true,true,"alias_depth"};
+    DirectoryEntry entry{"work",L"工作",L"D:\\Projects\\Sinan","Ctrl+Alt+1",true,true,"alias_depth"};
     DisplayOptions display{2,L"\\",{entry}};
-    expect(format_title(L"d:/Projects/TabTail/./",display).text==L"工作","exact alias and slash/case normalization");
-    expect(format_title(L"D:\\Projects\\TabTail\\src\\agent\\config",display).text==L"工作 · agent\\config","relative suffix respects depth");
-    display.depth=3;expect(format_title(L"D:\\Projects\\TabTail\\src\\agent\\config",display).text==L"工作 · src\\agent\\config","preview reacts to depth");
-    display.depth=std::nullopt;expect(format_title(L"D:\\Projects\\TabTail\\a\\b\\c\\d",display).text==L"工作 · a\\b\\c\\d","all relative components");
-    expect(!alias_title(display.entries,L"D:\\Projects\\TabTail-old\\src",display),"directory boundary");
-    display.entries[0].descendants=false;expect(!alias_title(display.entries,L"D:\\Projects\\TabTail\\src",display),"exact default excludes descendants");
+    expect(format_title(L"d:/Projects/Sinan/./",display).text==L"工作","exact alias and slash/case normalization");
+    expect(format_title(L"D:\\Projects\\Sinan\\src\\agent\\config",display).text==L"工作 · agent\\config","relative suffix respects depth");
+    display.depth=3;expect(format_title(L"D:\\Projects\\Sinan\\src\\agent\\config",display).text==L"工作 · src\\agent\\config","preview reacts to depth");
+    display.depth=std::nullopt;expect(format_title(L"D:\\Projects\\Sinan\\a\\b\\c\\d",display).text==L"工作 · a\\b\\c\\d","all relative components");
+    expect(!alias_title(display.entries,L"D:\\Projects\\Sinan-old\\src",display),"directory boundary");
+    display.entries[0].descendants=false;expect(!alias_title(display.entries,L"D:\\Projects\\Sinan\\src",display),"exact default excludes descendants");
     display.entries[0].descendants=true;auto child=entry;child.id="child";child.path+=L"\\src";child.name=L"源代码";child.title="alias";child.shortcut="";display.entries.push_back(child);
-    expect(format_title(L"D:\\Projects\\TabTail\\src\\agent",display).text==L"源代码","most specific entry");
-    display.entries[1].title="off";expect(!alias_title(display.entries,L"D:\\Projects\\TabTail\\src\\agent",display),"specific opt out does not inherit parent alias");
-    display.entries[1].enabled=false;expect(alias_title(display.entries,L"D:\\Projects\\TabTail\\src\\agent",display).has_value(),"disabled entry does not shadow");
+    expect(format_title(L"D:\\Projects\\Sinan\\src\\agent",display).text==L"源代码","most specific entry");
+    display.entries[1].title="off";expect(!alias_title(display.entries,L"D:\\Projects\\Sinan\\src\\agent",display),"specific opt out does not inherit parent alias");
+    display.entries[1].enabled=false;expect(alias_title(display.entries,L"D:\\Projects\\Sinan\\src\\agent",display).has_value(),"disabled entry does not shadow");
     expect(directory_key(L"\\\\server\\share\\a\\..\\b\\")==L"\\\\SERVER\\SHARE\\B","UNC normalization");
     expect(directory_key(L"D:\\Ärger")==directory_key(L"d:\\ärger"),"Windows Unicode case mapping");
-    expect(directory_key(L"\\\\?\\D:\\Projects\\TabTail")==directory_key(entry.path),"extended drive path");
+    expect(directory_key(L"\\\\?\\D:\\Projects\\Sinan")==directory_key(entry.path),"extended drive path");
     rejects([&]{auto e=entry;e.path=L"D:relative";validate_entries({e});});
     rejects([&]{auto e=entry;e.path=L"shell:Downloads";validate_entries({e});});
     rejects([&]{auto e=entry;e.name=L"bad\nname";validate_entries({e});});
     rejects([&]{auto e=entry;e.id="same";validate_entries({e,e});});
-    rejects([&]{auto e=entry;e.id="other";e.path=L"d:/projects/tabtail/";validate_entries({entry,e});});
+    rejects([&]{auto e=entry;e.id="other";e.path=L"d:/projects/sinan/";validate_entries({entry,e});});
     Config config;config.features["directories"]["entries"]=Json::array({entry_json(entry)});validate_config(config);
     auto copy=config_from_json(config_json(config));expect(copy.display_options()==config.display_options(),"config JSON roundtrip");
     RuntimePolicy policy{copy.display_options(),std::make_shared<RuleSet>(),{}};
@@ -52,8 +53,8 @@ int main(){try{
     expect(shortcut_chord(MOD_CONTROL|MOD_SHIFT,VK_F12)=="Ctrl+Shift+F12","record modified function key");
     expect(shortcut_chord(0,'A').empty()&&shortcut_chord(MOD_CONTROL,VK_TAB).empty(),"plain text and Tab retain input navigation");
     {ShortcutRecorder recorder(GetForegroundWindow(),[]{});expect(recorder.error().empty()&&recorder.take().empty()&&!recorder.hook_active(),"recorder stays unhooked with no field armed");}
-    {auto dll=executable_path().parent_path()/L"tabtail-hook.dll";auto module=LoadLibraryExW(dll.c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);expect(module!=nullptr,"load title DLL for read-only preflight");
-        auto same=conflicting_title_modules(GetCurrentProcessId(),dll);auto other=conflicting_title_modules(GetCurrentProcessId(),dll.parent_path()/L"another-copy"/L"tabtail-hook.dll");FreeLibrary(module);
+    {auto dll=executable_path().parent_path()/L"sinan-hook.dll";auto module=LoadLibraryExW(dll.c_str(),nullptr,LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR|LOAD_LIBRARY_SEARCH_SYSTEM32);expect(module!=nullptr,"load title DLL for read-only preflight");
+        auto same=conflicting_title_modules(GetCurrentProcessId(),dll);auto other=conflicting_title_modules(GetCurrentProcessId(),dll.parent_path()/L"another-copy"/L"sinan-hook.dll");FreeLibrary(module);
         expect(same.empty(),"same title module path accepted");expect(other.size()==1&&other.front()==dll,"foreign title module path reported");}
     // Hold a real OS registration; no keystrokes or Explorer changes.
     auto chord=parse_shortcut("Ctrl+Alt+Shift+F23");

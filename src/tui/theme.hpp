@@ -2,7 +2,7 @@
 #include <ftxui/dom/elements.hpp>
 #include <ftxui/screen/color.hpp>
 
-namespace tabtail::nord {
+namespace sinan::nord {
 // Construct FTXUI colors after terminal capabilities are configured.
 struct Rgb {
     uint8_t r,g,b;

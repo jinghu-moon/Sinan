@@ -1,10 +1,11 @@
 #include "installer/install.hpp"
-#include "agent/runtime.hpp"
+#include "client/agent.hpp"
 #include "installer/startup.hpp"
 #include <vector>
 
-namespace tabtail {
+namespace sinan {
 namespace {
+constexpr const wchar_t* runtime_files[]={L"sinan.exe",L"sinan-agent.exe",L"sinan-login.exe",L"sinan-symbols.exe",L"sinan-hook.dll",L"sinan-layout.dll",L"sinan-features.dll",L"sinan-style.dll"};
 Json load_state(const fs::path& root) {
     auto p = root / L"install-state.json";
     if (!fs::exists(p)) return {{"schema_version", 1}, {"path_owned", false}};
@@ -16,7 +17,7 @@ Json load_state(const fs::path& root) {
 void save_state(const fs::path& root, const Json& state) { atomic_write(root / L"install-state.json", state.dump(2) + "\n"); }
 Json manage_path_locked(const fs::path& root, bool add) {
     auto bin = root / L"bin";
-    if (add && !fs::is_regular_file(bin / L"tabtail.exe")) throw Error(1, "尚未安装，请先执行 tabtail install");
+    if (add && !fs::is_regular_file(bin / L"sinan.exe")) throw Error(1, "尚未安装，请先执行 sinan install");
     auto state = load_state(root);
     bool owned = state.value("path_owned", false);
     PathChange result;
@@ -45,34 +46,20 @@ Json manage_path(const fs::path& root, bool add) {
 }
 Json install(const fs::path& root) {
     FileLock lock(root / L"install.lock");
-    auto source = executable_path();
-    auto dest = root / L"bin" / L"tabtail.exe";
-    auto source_dll = source.parent_path() / L"tabtail-hook.dll";
-    if (!fs::is_regular_file(source_dll)) throw Error(1, "分发目录缺少 tabtail-hook.dll；请保留 EXE 与 DLL 配套文件");
-    auto source_layout=source.parent_path()/L"tabtail-layout.dll";
-    if(!fs::is_regular_file(source_layout))throw Error(1,"分发目录缺少 tabtail-layout.dll");
-    for(auto name:{L"tabtail-features.dll",L"tabtail-style-0.7.dll",L"tabtail-login.exe",L"tabtail-symbols.exe"})if(!fs::is_regular_file(source.parent_path()/name))throw Error(1,"Distribution is missing "+utf8(name));
+    auto source = executable_path().parent_path()/L"sinan.exe";
+    auto dest = root / L"bin" / L"sinan.exe";
+    for(auto name:runtime_files)if(!fs::is_regular_file(source.parent_path()/name))throw Error(1,"Distribution is missing "+utf8(name));
     fs::create_directories(dest.parent_path());
-    if (!fs::equivalent(source.parent_path(), dest.parent_path())) {
-        // Check the whole binary pair before copying either file.
-        for (const auto& name : {L"tabtail.exe", L"tabtail-hook.dll", L"tabtail-layout.dll",L"tabtail-features.dll",L"tabtail-style-0.7.dll",L"tabtail-login.exe",L"tabtail-symbols.exe"}) {
-            auto from = source.parent_path() / name, to = dest.parent_path() / name;
-            if (fs::exists(to) && read_file(from) != read_file(to))
-                throw Error(1, "已安装其他版本；请先从分发目录卸载旧版本，清理被 Explorer 占用的 DLL 后重试。");
+    if(!fs::equivalent(source.parent_path(),dest.parent_path())){
+        // Validate every file before copying any file; never overwrite a loaded adapter.
+        for(auto name:runtime_files){auto from=source.parent_path()/name,to=dest.parent_path()/name;
+            if(fs::exists(to)&&read_file(from)!=read_file(to))throw Error(1,"Installed runtime differs; uninstall the prior distribution first");
         }
-        if (fs::exists(dest)) {
-            if (read_file(source) != read_file(dest))
-                throw Error(1, "已安装其他版本；此版本暂不支持覆盖升级，请先从分发目录卸载旧版本。");
-        } else fs::copy_file(source, dest);
-        auto dll_dest = dest.parent_path() / L"tabtail-hook.dll";
-        if (!fs::exists(dll_dest)) fs::copy_file(source_dll, dll_dest);
-        auto layout_dest=dest.parent_path()/L"tabtail-layout.dll";
-        if(!fs::exists(layout_dest))fs::copy_file(source_layout,layout_dest);
-        for(auto name:{L"tabtail-features.dll",L"tabtail-style-0.7.dll",L"tabtail-login.exe",L"tabtail-symbols.exe"})if(!fs::exists(dest.parent_path()/name))fs::copy_file(source.parent_path()/name,dest.parent_path()/name);
+        for(auto name:runtime_files)if(!fs::exists(dest.parent_path()/name))fs::copy_file(source.parent_path()/name,dest.parent_path()/name);
     }
     // CPack places README and licenses next to bin/. A build-tree install may have neither.
     auto package = source.parent_path().filename() == L"bin" ? source.parent_path().parent_path() : source.parent_path();
-    for (const auto& name : {L"README.md", L"LICENSE"}) {
+    for (const auto& name : {L"README.md", L"LICENSE",L"THIRD_PARTY.md"}) {
         auto from = package / name, to = root / name;
         if (fs::is_regular_file(from) && !fs::equivalent(from.parent_path(), to.parent_path())) fs::copy_file(from, to, fs::copy_options::overwrite_existing);
     }
@@ -86,17 +73,18 @@ Json install(const fs::path& root) {
         }
     }
     if(!fs::equivalent(package,root))for(auto relative:{L"docs/evidence/01-native-probe.json",L"docs/evidence/02-tab-icon-fix.json",L"docs/evidence/02-tab-icon-user-confirmed.png",L"docs/research/02-shelltabs-tab-icons.md",L"assets/icons/pin-rounded.svg",L"assets/icons/lock-rounded.svg",L"tools/update-agent.ps1",
-        L"docs/evidence/04-symbol-resolution.json",L"docs/evidence/05-symbol-compatibility.json",L"docs/research/03-explorertabutility-compatibility.md",L"docs/research/04-explorerpatcher-symbol-compatibility.md"}) {
+        L"docs/evidence/04-symbol-resolution.json",L"docs/evidence/05-symbol-compatibility.json",L"docs/research/03-explorertabutility-compatibility.md",L"docs/research/04-explorerpatcher-symbol-compatibility.md",
+        L"docs/06-sinan-refactor-tdd.md",L"docs/testing-sinan.md",L"docs/evidence/07-sinan-refactor.json",L"docs/history/tabtail-v0.11.md"}) {
         auto from=package/relative,to=root/relative;if(fs::is_regular_file(from)){fs::create_directories(to.parent_path());fs::copy_file(from,to,fs::copy_options::overwrite_existing);}
     }
     ConfigStore store(root);
     if (!fs::exists(store.path())) store.update([](Config&) {});
     else store.load();
     if(store.load().features.at("restore").at("automatic").get<bool>())manage_restore_startup(root,true,dest);
-    auto state = load_state(root); state["version"] = TABTAIL_VERSION; state["installed"] = true; save_state(root, state);
+    auto state = load_state(root); state["version"] = SINAN_VERSION; state["installed"] = true; save_state(root, state);
     auto result = manage_path_locked(root, true);
     result["installed"] = true; result["executable"] = utf8(dest.wstring());
-    result["message"] = "TabTail 已安装并登记 PATH；请完全退出并重新启动终端应用，执行 doctor 检查适配后使用 start。";
+    result["message"] = "Sinan 已安装并登记 PATH；请完全退出并重新启动终端应用，执行 doctor 检查适配后使用 start。";
     return result;
 }
 Json uninstall(const fs::path& root, bool purge) {
@@ -106,11 +94,11 @@ Json uninstall(const fs::path& root, bool purge) {
     manage_restore_startup(root,false); // Removes only the exact command recorded as ours.
     std::vector<std::string> pending;
     std::error_code ec;
-    for (const auto& name : {L"tabtail.exe", L"tabtail-hook.dll", L"tabtail-layout.dll",L"tabtail-features.dll",L"tabtail-style-0.7.dll",L"tabtail-login.exe",L"tabtail-symbols.exe"}) {
+    for (auto name : runtime_files) {
         auto file = root / L"bin" / name; ec.clear();
         if (fs::exists(file) && !fs::remove(file, ec)) pending.push_back(utf8(file.wstring()));
     }
-    for (const auto& file : {L"README.md", L"LICENSE", L"docs\\design.md", L"docs\\implementation.md", L"docs\\testing-v0.5.md", L"docs\\tab-width.md",L"docs\\01-tab-protection-and-appearance.md",L"docs\\testing-tab-features.md",
+    for (const auto& file : {L"README.md", L"LICENSE",L"THIRD_PARTY.md",L"docs/06-sinan-refactor-tdd.md",L"docs/testing-sinan.md",L"docs/evidence/07-sinan-refactor.json",L"docs/history/tabtail-v0.11.md", L"docs\\design.md", L"docs\\implementation.md", L"docs\\testing-v0.5.md", L"docs\\tab-width.md",L"docs\\01-tab-protection-and-appearance.md",L"docs\\testing-tab-features.md",
         L"docs/evidence/01-native-probe.json",L"assets/icons/pin-rounded.svg",L"assets/icons/lock-rounded.svg",L"tools/update-agent.ps1",
         L"docs/evidence/02-tab-icon-fix.json",L"docs/evidence/02-tab-icon-user-confirmed.png",L"docs/research/02-shelltabs-tab-icons.md",
         L"docs/05-symbol-compatibility.md",L"docs/testing-v0.10.0.md",L"docs/evidence/04-symbol-resolution.json",L"docs/evidence/05-symbol-compatibility.json",L"docs/research/03-explorertabutility-compatibility.md",L"docs/research/04-explorerpatcher-symbol-compatibility.md",
@@ -123,7 +111,7 @@ Json uninstall(const fs::path& root, bool purge) {
     if (purge) {
         if (pending.empty()) {
             // Only remove files owned by this version; never recursively delete the root.
-            for (const auto& file : {L"tabtail.toml", L"config.lock", L"install-state.json", L"README.md", L"LICENSE",L"workspace.json",L"workspace.lock",L"startup.lock",L"tabtail.pre-schema3.toml"}) {
+            for (const auto& file : {L"sinan.toml", L"config.lock", L"install-state.json", L"README.md", L"LICENSE",L"workspace.json",L"workspace.lock",L"startup.lock",L"sinan.pre-schema3.toml"}) {
                 ec.clear(); auto p = root / file; fs::remove(p, ec);
                 if (ec) pending.push_back(utf8(p.wstring()));
             }
@@ -131,8 +119,8 @@ Json uninstall(const fs::path& root, bool purge) {
     }
     result["pending_delete"] = pending;
     result["complete"] = pending.empty();
-    result["message"] = pending.empty() ? "TabTail 已卸载；默认保留配置。" : "PATH 已移除，文件仍被占用；标题 DLL 在 Explorer 退出前保持加载。请退出占用进程后，从解压目录再次执行 uninstall 完成清理。";
-    if (purge && pending.empty()) result["message"] = "TabTail 已卸载，配置已清理。";
+    result["message"] = pending.empty() ? "Sinan 已卸载；默认保留配置。" : "PATH 已移除，文件仍被占用；标题 DLL 在 Explorer 退出前保持加载。请退出占用进程后，从解压目录再次执行 uninstall 完成清理。";
+    if (purge && pending.empty()) result["message"] = "Sinan 已卸载，配置已清理。";
     return result;
 }
 }

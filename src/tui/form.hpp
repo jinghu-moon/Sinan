@@ -6,7 +6,7 @@
 #include <ftxui/dom/node.hpp>
 #include <algorithm>
 
-namespace tabtail {
+namespace sinan {
 // Unlike a single-row menu, choices wrap as whole items in small terminals.
 class FormChoice : public ftxui::ComponentBase {
 public:

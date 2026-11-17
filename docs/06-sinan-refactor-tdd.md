@@ -1,6 +1,6 @@
 # 06：司南 Sinan 开发期架构重构与 TDD 执行文档
 
-状态：计划已冻结，按阶段执行；完成记录附于文末。日期：2026-11-18。
+状态：P0–P5 的本地实现与验证已完成；公开推送检查见执行记录。日期：2026-11-18。
 
 ## 1. 目标、事实与取舍
 
@@ -72,7 +72,7 @@ Explorer 桥接只接受相邻 sinan-agent.exe，开发用只读探针仅允许�
 - [x] 运行重构前 CTest：20/20，通过，日志保存在被忽略的 build/research/sinan-baseline-ctest.log。
 - [x] 确认 MIT 与第三方许可证，排除参考项目及本地产物，扫描待提交文件的凭据模式和体积。
 - [x] 初始提交、基线标签、公开仓库及首次推送。
-- [ ] 提交本文后才开始修改实现。
+- [x] 提交本文后才开始修改实现（文档提交 c0dfda2）。
 
 ### P1：结构／身份测试（Red）
 
@@ -152,4 +152,10 @@ cmake --build build/sinan-headless --config Release --parallel 6
 ## 8. 执行记录
 
 - P0：20/20 基线通过；公开仓库已创建，MIT 已被 GitHub 识别；209 个初始跟踪文件，约 2.2 MB，未发现凭据模式。
-- P1–P5：待执行，结果随后追加；不预写通过状态。
+- P1 Red：旧版 `tabtail.exe` 运行新增 architecture 测试，失败于“CLI must be the renamed Sinan product”；新增应用测试失败于“Rule not found”。日志：`build/research/sinan-red-process.log`、`sinan-red-application.log`。这些失败先于生产结构修改。
+- P2 Green：namespace／品牌／产物／默认目录／配置／IPC 全部更名；独立 Agent、登录链路和完整分发清单已实现。客户端、后台快捷键与终端录入分离。CLI 消费共享应用层，不链接 Agent 实现。跨目录客户端及同目录未知角色拒绝测试均通过。
+- P3 Green：统一配置、预览、目录、快捷键、位置、宽度增量编辑和样式导入；动作目录含 14 项，支持双语、关键词和明确参数执行。53 个新增应用断言通过；未知／缺失请求、非法修改、重复入口和超大样式文件不写入配置。原有冲突和并发写入测试继续通过。
+- P4 Green：干净 `build/sinan` 完整构建成功；干净 `build/sinan-headless` 最初以 BUILD_TESTING=OFF 构建成功且无 FTXUI，随后开启测试复验。两种安装目录均通过完整八文件清单、许可证、本地命令和独立 Agent smoke；生成工程依赖与真实 PE imports 检查通过。修正了原 install 对被忽略截图／原始证据的依赖。Windows CI 配置完整／无 TUI 两路构建、CTest、安装、包 smoke 和 artifact；远端结果以 GitHub Actions 为准。
+- P5 本地回归：完整 23/23 CTest 通过，约 20 秒；无 TUI 22/22 通过，约 11 秒；保留原 20 组业务测试，只有 headless 不构建 TUI 专项，规则测试按构建选项分别验收界面／无界面诊断。TUI 1747 个组件断言通过，保留双语、四字按钮和窄窗口。三个模块离线解析及缓存复用成功，29 个符号、network_used=false；没有执行用户 Explorer 注入／重启或接管旧代理。
+- 证据摘要：[07-sinan-refactor.json](evidence/07-sinan-refactor.json)。详细运行日志及渲染保留在忽略的 build/ 下；[Sinan 测试步骤](testing-sinan.md) 区分自动测试与真实交互验收。
+- 提交／推送：基线及本文已在公开 main；实现完成后提交并推送同一 main，保留原基线标签。不将新 GUI、脚本执行器或尚未实测的 Explorer 交互记为已验收。

@@ -3,7 +3,7 @@
 #include <array>
 #include <set>
 
-namespace tabtail {
+namespace sinan {
 namespace {
 struct Entry {const char* id;const char* en;const char* zh;};
 constexpr Entry entries[]{
@@ -143,7 +143,7 @@ constexpr Entry entries[]{
     {"light_text_normal","Light text / normal","浅色文字 / 普通"},{"light_text_hover","Light text / hover","浅色文字 / 悬停"},{"light_text_selected","Light text / selected","浅色文字 / 选中"},
     {"dark_text_normal","Dark text / normal","深色文字 / 普通"},{"dark_text_hover","Dark text / hover","深色文字 / 悬停"},{"dark_text_selected","Dark text / selected","深色文字 / 选中"},
     {"pinned_style","Pinned","固定"},{"protected_style","Independent protection","独立保护"},{"locked_style","Directory lock","目录锁定"},{"current_style","Current tab","当前标签"},{"directory_style","Directory style rule","目录外观规则"},
-    {"style_category","Style","外观"},{"shortcuts_category","Shortcuts","快捷键"},{"notifications_category","Notifications","通知"},{"restore_category","Restore","恢复"},{"feature_sample","TabTail working tab","TabTail 工作标签"},
+    {"style_category","Style","外观"},{"shortcuts_category","Shortcuts","快捷键"},{"notifications_category","Notifications","通知"},{"restore_category","Restore","恢复"},{"feature_sample","Sinan working tab","Sinan 工作标签"},
     {"effective_protection","Effective close protection","有效关闭保护"},{"guard_confirmed","Behavior confirmed","行为已确认"},{"locked_directory","Locked directory","锁定目录"},{"appearance_confirmed","Appearance confirmed","外观已确认"},{"style_source","Directory style source","目录外观来源"},
     {"batch_action","Batch action: pin / protect / lock","批量操作：pin / protect / lock"},{"batch_state","Batch state: on / off","批量状态：on / off"},{"batch_apply","Apply to filtered tabs","批量应用"},
     {"refresh","Refresh","刷新界面"},{"up","Move up","上移规则"},{"down","Move down","下移规则"},

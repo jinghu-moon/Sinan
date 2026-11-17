@@ -6,7 +6,7 @@
 #include <span>
 #include <vector>
 
-namespace tabtail::compat {
+namespace sinan::compat {
 using Json = nlohmann::json;
 inline constexpr int cache_schema = 1;
 enum class Module { frame, view, ui };
@@ -66,7 +66,7 @@ void refresh_profile();
 Json status(const fs::path& cache = cache_directory());
 // Starts a bounded child process; DbgHelp and network calls never execute in Explorer.
 Json prepare(const fs::path& cache = cache_directory(), bool offline = false, bool force = false);
-// Used only by tabtail-symbols.exe. Optional local PDB is for offline preparation.
+// Used only by sinan-symbols.exe. Optional local PDB is for offline preparation.
 Json resolve(const fs::path& cache, bool offline, bool force, const fs::path& local_pdb = {});
 Json resolve_module(const fs::path& cache, bool offline, bool force, Module module, const fs::path& local_pdb = {});
 Json resolve_all(const fs::path& cache, bool offline, bool force);

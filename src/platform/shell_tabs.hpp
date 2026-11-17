@@ -6,7 +6,7 @@
 #include <vector>
 #include <map>
 
-namespace tabtail {
+namespace sinan {
 struct ShellTabObservation {
     HWND window = nullptr;
     HWND browser_window = nullptr;

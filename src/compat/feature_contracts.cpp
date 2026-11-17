@@ -4,7 +4,7 @@
 #include <algorithm>
 #include <functional>
 
-namespace tabtail::compat {
+namespace sinan::compat {
 namespace {
 struct Ins {uint32_t rva;hde64s h;std::vector<unsigned char> b;};
 bool prefix(std::span<const unsigned char> b,std::initializer_list<unsigned char> p){return b.size()>=p.size()&&std::equal(p.begin(),p.end(),b.begin());}

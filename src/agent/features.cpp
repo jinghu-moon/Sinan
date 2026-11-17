@@ -4,7 +4,7 @@
 #include <algorithm>
 #include "policy/entries.hpp"
 
-namespace tabtail {
+namespace sinan {
 namespace {
 std::string state_description(const TabFlags& flags,const std::wstring& path,const std::string& language) {
     bool zh=language!="en";std::string out;

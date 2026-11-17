@@ -1,6 +1,6 @@
 #include "policy/display.hpp"
 
-namespace tabtail {
+namespace sinan {
 void validate_depth(std::optional<int> depth) {
     if (depth && (*depth < 1 || *depth > 32))
         throw PolicyError(PolicyErrorCode::invalid_argument, "depth 必须为 1..32 或 all");

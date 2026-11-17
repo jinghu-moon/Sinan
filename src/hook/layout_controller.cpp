@@ -4,7 +4,7 @@
 #include <sddl.h>
 #include <atomic>
 
-namespace tabtail {
+namespace sinan {
 Json send_layout_request(const NativeTab& tab, LayoutAction action, const TabAppearance& options) {
     validate_appearance(options);
     bool allowed = false;
@@ -12,11 +12,11 @@ Json send_layout_request(const NativeTab& tab, LayoutAction action, const TabApp
         if (process.pid == tab.process_id && process.created == tab.process_started) allowed = true;
     if (!allowed) throw Error(4, "无法验证布局目标 Explorer 的用户、会话或进程身份");
     if (!native_inventory_supported()) throw Error(3, "当前 Explorer 版本尚无布局适配");
-    auto dll = executable_path().parent_path() / L"tabtail-layout.dll";
+    auto dll = executable_path().parent_path() / L"sinan-layout.dll";
     auto module = LoadLibraryExW(dll.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_SYSTEM32);
-    if (!module) throw Error(1, system_error("加载 tabtail-layout.dll"));
+    if (!module) throw Error(1, system_error("加载 sinan-layout.dll"));
     struct Module { HMODULE value; ~Module() { FreeLibrary(value); } } module_owner{module};
-    auto callback = reinterpret_cast<HOOKPROC>(GetProcAddress(module, "TabTailLayoutHook"));
+    auto callback = reinterpret_cast<HOOKPROC>(GetProcAddress(module, "SinanLayoutHook"));
     if (!callback) throw Error(1, "布局 DLL 缺少桥接导出");
     DWORD pid{}; auto thread = GetWindowThreadProcessId(tab.window, &pid);
     if (pid != tab.process_id) throw Error(4, "布局目标窗口身份已变化");

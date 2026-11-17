@@ -7,11 +7,11 @@
 #include <array>
 #include <cstring>
 
-namespace tabtail::compat {
+namespace sinan::compat {
 namespace {
 struct Internet{HINTERNET value{};~Internet(){if(value)WinHttpCloseHandle(value);}operator HINTERNET()const{return value;}};
 std::string download(const Image& image){
-    Internet session{WinHttpOpen(L"TabTail/" L"0.11 symbols",WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0)};
+    Internet session{WinHttpOpen(L"Sinan/" L"0.11 symbols",WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY,WINHTTP_NO_PROXY_NAME,WINHTTP_NO_PROXY_BYPASS,0)};
     if(!session.value)throw Error(5,system_error("Open Microsoft symbol connection"));
     WinHttpSetTimeouts(session,8000,8000,8000,8000);
     Internet connection{WinHttpConnect(session,L"msdl.microsoft.com",INTERNET_DEFAULT_HTTPS_PORT,0)};
@@ -70,7 +70,7 @@ Json resolve_module(const fs::path& cache,bool offline,bool force,Module target,
         auto source=local_pdb.empty()?pdb:local_pdb;
         if(!fs::is_regular_file(source)||fs::file_size(source)>128*1024*1024)throw Error(5,"Offline PDB missing or larger than 128 MiB");
         fs::copy_file(source,staged,fs::copy_options::overwrite_existing);
-    }else{if(offline)throw Error(5,"Offline PDB is missing; use tabtail-symbols --pdb <file> or retry without --offline");network=true;atomic_write(staged,download(image));}
+    }else{if(offline)throw Error(5,"Offline PDB is missing; use sinan-symbols --pdb <file> or retry without --offline");network=true;atomic_write(staged,download(image));}
     Rvas rvas;Json missing=Json::array();
     {
         // All DbgHelp calls occur synchronously on this worker's only thread.

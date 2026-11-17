@@ -6,7 +6,7 @@
 #include <set>
 #include <sstream>
 
-namespace tabtail {
+namespace sinan {
 namespace {
 using J=FeatureJson;
 void keys(const J& j,std::initializer_list<const char*> allowed) {

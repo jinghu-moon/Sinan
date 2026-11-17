@@ -7,7 +7,7 @@
 #include <atomic>
 #include "platform/user_process.hpp"
 
-namespace tabtail {
+namespace sinan {
 bool workspace_directory_available(const std::wstring& path,DWORD timeout_ms) {
     // UNC and mapped drives can block indefinitely. Cap concurrent probes and
     // let timed-out requests finish without retaining any agent/COM objects.

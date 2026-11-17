@@ -4,7 +4,7 @@
 #include <exdisp.h>
 #include <vector>
 
-namespace tabtail {
+namespace sinan {
 struct ShellCollectionSnapshot {
     std::vector<Microsoft::WRL::ComPtr<IDispatch>> windows;
     bool complete = true;

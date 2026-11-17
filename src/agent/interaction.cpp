@@ -3,67 +3,11 @@
 #include <utility>
 #include <algorithm>
 
-namespace tabtail {
+namespace sinan {
 namespace {constexpr UINT input_update=WM_APP+0x542;}
-std::string shortcut_chord(UINT modifiers,UINT key) {
-    if(!(modifiers&(MOD_CONTROL|MOD_ALT|MOD_WIN)))return {};
-    std::string name;if((key>='A'&&key<='Z')||(key>='0'&&key<='9'))name=static_cast<char>(key);
-    else if(key>=VK_F1&&key<=VK_F24)name="F"+std::to_string(key-VK_F1+1);
-    else return {};
-    std::string chord;
-    if(modifiers&MOD_CONTROL)chord+="Ctrl+";if(modifiers&MOD_ALT)chord+="Alt+";
-    if(modifiers&MOD_SHIFT)chord+="Shift+";if(modifiers&MOD_WIN)chord+="Win+";
-    return chord+name;
-}
-thread_local ShortcutRecorder* ShortcutRecorder::current_=nullptr;
-ShortcutRecorder::ShortcutRecorder(HWND terminal,std::function<void()> wake):terminal_(terminal),wake_(std::move(wake)),ready_(CreateEventW(nullptr,TRUE,FALSE,nullptr)) {
-    if(!ready_){error_=system_error("Shortcut recorder event");return;}
-    thread_=std::thread([this]{
-        current_=this;MSG message{};PeekMessageW(&message,nullptr,0,0,PM_NOREMOVE);thread_id_=GetCurrentThreadId();
-        SetEvent(ready_.get());
-        while(GetMessageW(&message,nullptr,0,0)>0){if(message.message==input_update)update_hook();else {TranslateMessage(&message);DispatchMessageW(&message);}}
-        if(hook_)UnhookWindowsHookEx(hook_);hooked_=false;current_=nullptr;
-    });
-    WaitForSingleObject(ready_.get(),INFINITE);
-}
-ShortcutRecorder::~ShortcutRecorder(){field_=0;if(thread_.joinable()){PostThreadMessageW(thread_id_,WM_QUIT,0,0);thread_.join();}}
-void ShortcutRecorder::focus(int field){if(field_.exchange(field)!=field&&thread_id_)PostThreadMessageW(thread_id_,input_update,0,0);}
-void ShortcutRecorder::update_hook() {
-    if(field_.load()||consumed_.any()) {
-        if(!hook_){hook_=SetWindowsHookExW(WH_KEYBOARD_LL,keyboard,GetModuleHandleW(nullptr),0);std::lock_guard lock(mutex_);error_=hook_?"":system_error("Shortcut recorder hook");}
-    }else if(hook_){UnhookWindowsHookEx(hook_);hook_=nullptr;}
-    hooked_=hook_!=nullptr;
-}
-std::string ShortcutRecorder::error(){std::lock_guard lock(mutex_);return error_;}
-std::deque<CapturedShortcut> ShortcutRecorder::take(){std::lock_guard lock(mutex_);return std::exchange(events_,{});}
-LRESULT CALLBACK ShortcutRecorder::keyboard(int code,WPARAM message,LPARAM data) {
-    auto self=current_;if(code!=HC_ACTION||!self)return CallNextHookEx(nullptr,code,message,data);
-    auto key=reinterpret_cast<KBDLLHOOKSTRUCT*>(data);
-    if(key->vkCode>=256)return CallNextHookEx(nullptr,code,message,data);
-    if(message==WM_KEYUP||message==WM_SYSKEYUP){if(self->consumed_.test(key->vkCode)){self->consumed_.reset(key->vkCode);if(!self->field_&&self->consumed_.none())PostThreadMessageW(self->thread_id_,input_update,0,0);return 1;}}
-    else if((message==WM_KEYDOWN||message==WM_SYSKEYDOWN)&&!(key->flags&LLKHF_INJECTED)) {
-        if(self->consumed_.test(key->vkCode))return 1;
-        auto field=self->field_.load();
-        if(field&&self->terminal_&&GetForegroundWindow()==self->terminal_) {
-            UINT modifiers{};
-            if(GetAsyncKeyState(VK_CONTROL)&0x8000)modifiers|=MOD_CONTROL;
-            if(GetAsyncKeyState(VK_MENU)&0x8000)modifiers|=MOD_ALT;
-            if(GetAsyncKeyState(VK_SHIFT)&0x8000)modifiers|=MOD_SHIFT;
-            if((GetAsyncKeyState(VK_LWIN)|GetAsyncKeyState(VK_RWIN))&0x8000)modifiers|=MOD_WIN;
-            auto chord=shortcut_chord(modifiers,key->vkCode);
-            if(!chord.empty()) {
-                std::unique_lock lock(self->mutex_,std::try_to_lock);
-                if(!lock||self->events_.size()>=16)return CallNextHookEx(nullptr,code,message,data);
-                self->consumed_.set(key->vkCode);self->events_.push_back({field,std::move(chord)});lock.unlock();
-                self->wake_();return 1;
-            }
-        }
-    }
-    return CallNextHookEx(nullptr,code,message,data);
-}
 DirectoryShortcuts::DirectoryShortcuts() {
-    WNDCLASSW cls{};cls.lpfnWndProc=procedure;cls.hInstance=GetModuleHandleW(nullptr);cls.lpszClassName=L"TabTail.DirectoryShortcuts.1";RegisterClassW(&cls);
-    window_=CreateWindowExW(0,cls.lpszClassName,L"TabTail",0,0,0,0,0,HWND_MESSAGE,nullptr,cls.hInstance,this);
+    WNDCLASSW cls{};cls.lpfnWndProc=procedure;cls.hInstance=GetModuleHandleW(nullptr);cls.lpszClassName=L"Sinan.DirectoryShortcuts.1";RegisterClassW(&cls);
+    window_=CreateWindowExW(0,cls.lpszClassName,L"Sinan",0,0,0,0,0,HWND_MESSAGE,nullptr,cls.hInstance,this);
 }
 DirectoryShortcuts::~DirectoryShortcuts(){for(auto& [id,entry]:ids_)UnregisterHotKey(window_,id);if(window_)DestroyWindow(window_);}
 LRESULT CALLBACK DirectoryShortcuts::procedure(HWND window,UINT message,WPARAM w,LPARAM l) {
@@ -223,8 +167,8 @@ Json ExplorerShortcuts::status(){
 }
 namespace {constexpr UINT notification_message=WM_APP+0x541;}
 SystemNotifications::SystemNotifications() {
-    WNDCLASSW cls{};cls.lpfnWndProc=procedure;cls.hInstance=GetModuleHandleW(nullptr);cls.lpszClassName=L"TabTail.NotificationHost.1";RegisterClassW(&cls);
-    window_=CreateWindowExW(0,cls.lpszClassName,L"TabTail",0,0,0,0,0,HWND_MESSAGE,nullptr,cls.hInstance,this);
+    WNDCLASSW cls{};cls.lpfnWndProc=procedure;cls.hInstance=GetModuleHandleW(nullptr);cls.lpszClassName=L"Sinan.NotificationHost.1";RegisterClassW(&cls);
+    window_=CreateWindowExW(0,cls.lpszClassName,L"Sinan",0,0,0,0,0,HWND_MESSAGE,nullptr,cls.hInstance,this);
     if(!window_)error_=system_error("Notification host");
 }
 void SystemNotifications::remove(UINT id){NOTIFYICONDATAW n{sizeof(n)};n.hWnd=window_;n.uID=id;Shell_NotifyIconW(NIM_DELETE,&n);items_.erase(id);}
@@ -250,10 +194,10 @@ bool SystemNotifications::show(const std::string& mode,const std::string& text,c
     if(!throttle_key.empty()){auto& last=throttle_[throttle_key];if(last&&now-last<10000)return false;last=now;}
     while(items_.size()>=20)remove(items_.begin()->first);
     NOTIFYICONDATAW n{sizeof(n)};n.hWnd=window_;n.uID=next_++;n.uFlags=NIF_MESSAGE|NIF_ICON|NIF_TIP;n.uCallbackMessage=notification_message;
-    n.hIcon=LoadIconW(nullptr,IDI_INFORMATION);wcscpy_s(n.szTip,L"TabTail");
+    n.hIcon=LoadIconW(nullptr,IDI_INFORMATION);wcscpy_s(n.szTip,L"Sinan");
     if(!Shell_NotifyIconW(NIM_ADD,&n)){error_=system_error("System notification registration");return false;}
     items_[n.uID]={tab_id,now+120000};n.uFlags=NIF_INFO;n.dwInfoFlags=failure?NIIF_WARNING:NIIF_INFO;
-    wcscpy_s(n.szInfoTitle,L"TabTail");wcsncpy_s(n.szInfo,wide(text).c_str(),_TRUNCATE);n.uTimeout=10000;
+    wcscpy_s(n.szInfoTitle,L"Sinan");wcsncpy_s(n.szInfo,wide(text).c_str(),_TRUNCATE);n.uTimeout=10000;
     if(!Shell_NotifyIconW(NIM_MODIFY,&n)){error_=system_error("System notification delivery");remove(n.uID);return false;}
     error_.clear();return true;
 }

@@ -21,6 +21,11 @@ CMakeUserPresets.json
 /workspace.json
 /install-state.json
 /startup-state.json
+/config.lock
+/install.lock
+/workspace.lock
+/startup.lock
+/*.pre-schema*.toml
 .env
 .env.*
 !.env.example

@@ -3,7 +3,7 @@
 #include <memory>
 #include <vector>
 
-namespace tabtail {
+namespace sinan {
 struct DirectoryRule {
     std::string id;
     std::wstring name;

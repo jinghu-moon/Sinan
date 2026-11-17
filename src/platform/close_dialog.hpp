@@ -3,7 +3,7 @@
 #include <commctrl.h>
 #include <string_view>
 
-namespace tabtail {
+namespace sinan {
 struct CloseDialogState {HWND window{};bool ending_session=false;};
 // Returns true only after an explicit close choice. Any setup/display failure
 // keeps the Explorer window open. The dialog runs in its own v6 activation scope.

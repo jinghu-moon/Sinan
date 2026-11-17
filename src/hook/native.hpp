@@ -2,7 +2,7 @@
 #include "platform/windows.hpp"
 #include <vector>
 
-namespace tabtail {
+namespace sinan {
 // Built-in offline fallback. Symbol profiles admit additional images only after layout validation.
 inline constexpr char supported_frame_sha256[] = "4e28d2076608df5525ec1b7b2ed8dc0e866f43bf2ded6a5e4213ccd1c2284cbe";
 inline constexpr uint32_t frame_vtable_rva = 0x24d2e0;

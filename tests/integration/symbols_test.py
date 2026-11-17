@@ -6,7 +6,7 @@ import sys
 import tempfile
 
 exe = Path(sys.argv[1]).resolve()
-with tempfile.TemporaryDirectory(prefix='tabtail-symbols-') as temp:
+with tempfile.TemporaryDirectory(prefix='sinan-symbols-') as temp:
     cache = Path(temp) / 'symbol cache 中文'
     data = Path(temp) / 'data'
     def run(*args, code=0):
@@ -28,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix='tabtail-symbols-') as temp:
     assert not list(cache.glob('*/stage-*')), 'Staging directory must be removed after failure'
     # Invalid offline input for a different module must not create a manifest,
     # leak its module-specific staged PDB, or affect config/agent state.
-    worker = exe.with_name('tabtail-symbols.exe')
+    worker = exe.with_name('sinan-symbols.exe')
     invalid = Path(temp) / 'invalid.pdb'
     invalid.write_bytes(b'not a valid Microsoft PDB')
     p = subprocess.run([str(worker), '--module', 'ui', '--offline', '--cache-dir', str(cache), '--pdb', str(invalid)], capture_output=True, encoding='utf-8', timeout=25)

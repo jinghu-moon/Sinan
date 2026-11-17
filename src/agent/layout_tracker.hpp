@@ -4,7 +4,7 @@
 #include <functional>
 #include <tuple>
 
-namespace tabtail {
+namespace sinan {
 // Width is global, so one lease per Explorer UI thread controls its tab strip(s).
 class LayoutTracker {
     using Key = std::tuple<DWORD,uint64_t,DWORD>;

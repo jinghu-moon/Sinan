@@ -2,7 +2,7 @@
 #include <map>
 #include <string>
 #include <string_view>
-namespace tabtail {
+namespace sinan {
 std::string resolved_language(std::string preference);
 class Messages {
     std::map<std::string,std::string,std::less<>> labels_;

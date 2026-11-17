@@ -8,7 +8,7 @@ import tempfile
 import tomllib
 
 exe = str(Path(sys.argv[1]).resolve())
-with tempfile.TemporaryDirectory(prefix="TabTail-cli-") as directory:
+with tempfile.TemporaryDirectory(prefix="Sinan-cli-") as directory:
     root = Path(directory) / "中文路径 with spaces"
 
     def run(*args, code=0):
@@ -17,7 +17,7 @@ with tempfile.TemporaryDirectory(prefix="TabTail-cli-") as directory:
         assert result.returncode == code, (args, result.returncode, result.stdout, result.stderr)
         return result
 
-    assert "TabTail" in run("--version").stdout
+    assert "Sinan" in run("--version").stdout
     assert "config" in run("--help").stdout
     assert not root.exists(), "Help/version must not create config"
     assert run("preview", r"D:\A\B\C").stdout.strip() == r"B\C"
@@ -28,7 +28,7 @@ with tempfile.TemporaryDirectory(prefix="TabTail-cli-") as directory:
     preview = json.loads(run("preview", r"\\nas\share\A\B", "--json").stdout)
     assert preview["title"] == r"A\B" and preview["filesystem"]
     run("config", "set", "depth", "3")
-    config_file = root / "tabtail.toml"
+    config_file = root / "sinan.toml"
     config = tomllib.loads(config_file.read_text(encoding="utf-8"))
     assert config["display"]["depth"] == 3
     assert config["enabled"] is False
@@ -77,7 +77,7 @@ with tempfile.TemporaryDirectory(prefix="TabTail-cli-") as directory:
     assert json.loads(run("style", "show").stdout) == styles
     assert tomllib.loads(config_file.read_text(encoding="utf-8"))["schema_version"] == 4
     before = config_file.read_bytes()
-    styles["default"]["text"]["font_family"] = "NoSuchTabTailFont9827"
+    styles["default"]["text"]["font_family"] = "NoSuchSinanFont9827"
     style_file.write_text(json.dumps(styles), encoding="utf-8")
     run("style", "load", str(style_file), code=2)
     assert config_file.read_bytes() == before

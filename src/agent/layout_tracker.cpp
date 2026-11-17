@@ -1,6 +1,6 @@
 #include "agent/layout_tracker.hpp"
 
-namespace tabtail {
+namespace sinan {
 Json LayoutTracker::synchronize(const std::vector<NativeTab>& observed,bool enabled,const TabAppearance& appearance,
     const Transport& transport,const Thread& thread,const Probe& probe) {
     validate_appearance(appearance);

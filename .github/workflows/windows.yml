@@ -1,0 +1,34 @@
+name: Windows build and test
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  windows:
+    runs-on: windows-2022
+    strategy:
+      matrix:
+        tui: ['ON', 'OFF']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Configure
+        run: cmake -S . -B build/ci -A x64 -DSINAN_BUILD_TUI=${{ matrix.tui }}
+      - name: Build
+        run: cmake --build build/ci --config Release --parallel 4
+      - name: Test
+        run: ctest --test-dir build/ci -C Release --output-on-failure
+      - name: Install
+        run: cmake --install build/ci --config Release --prefix build/package
+      - name: Package smoke
+        run: |
+          python tests/integration/package_test.py build/package ${{ matrix.tui }}
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python tests/integration/architecture_test.py build/package/bin/sinan.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          build/package/bin/sinan.exe --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sinan-windows-x64-tui-${{ matrix.tui }}
+          path: build/package/

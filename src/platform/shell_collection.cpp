@@ -1,7 +1,7 @@
 #include "platform/shell_collection.hpp"
 #include <sstream>
 
-namespace tabtail {
+namespace sinan {
 namespace {
 constexpr size_t max_shell_windows = 10000;
 std::string com_error(const char* action, HRESULT hr) {

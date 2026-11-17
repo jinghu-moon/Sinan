@@ -2,9 +2,9 @@
 #include "config/config.hpp"
 #include "hook/native.hpp"
 
-namespace tabtail {
-inline constexpr wchar_t style_message[]=L"TabTail.Style.1";
-inline std::wstring style_mapping(DWORD pid,uint64_t nonce){return L"Local\\TabTail-Style-"+std::to_wstring(pid)+L"-"+std::to_wstring(nonce);}
+namespace sinan {
+inline constexpr wchar_t style_message[]=L"Sinan.Style.1";
+inline std::wstring style_mapping(DWORD pid,uint64_t nonce){return L"Local\\Sinan-Style-"+std::to_wstring(pid)+L"-"+std::to_wstring(nonce);}
 enum class StyleAction:uint32_t { inspect=1, apply=2, restore=3, locate=4, open=5, order=6 };
 struct StylePacket {
     uint32_t magic=0x54545354,version=1,size=sizeof(StylePacket);

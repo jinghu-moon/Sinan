@@ -8,7 +8,7 @@
 #include <functional>
 #include <optional>
 
-namespace tabtail {
+namespace sinan {
 using Json = nlohmann::json;
 struct Config {
     int64_t revision = 1;
@@ -40,7 +40,7 @@ class ConfigStore {
     fs::path root_;
 public:
     explicit ConfigStore(fs::path root) : root_(std::move(root)) {}
-    fs::path path() const { return root_ / L"tabtail.toml"; }
+    fs::path path() const { return root_ / L"sinan.toml"; }
     Config load() const;
     Config update(const std::function<void(Config&)>& edit) const;
 };

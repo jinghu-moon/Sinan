@@ -3,7 +3,7 @@
 #include <atomic>
 #include <iostream>
 
-using namespace tabtail;
+using namespace sinan;
 namespace {
 int checks = 0;
 ProcessLifetime assume_running(DWORD, uint64_t) { return ProcessLifetime::running; }

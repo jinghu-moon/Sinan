@@ -4,7 +4,7 @@
 #include <fstream>
 #include <vector>
 
-namespace tabtail {
+namespace sinan {
 std::string utf8(std::wstring_view value) {
     if (value.empty()) return {};
     auto n = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
@@ -50,7 +50,7 @@ fs::path executable_path() {
 fs::path data_directory() {
     PWSTR value = nullptr;
     if (FAILED(SHGetKnownFolderPath(FOLDERID_LocalAppData, 0, nullptr, &value))) throw Error(1, "无法获取 LocalAppData");
-    fs::path out = fs::path(value) / L"TabTail";
+    fs::path out = fs::path(value) / L"Sinan";
     CoTaskMemFree(value);
     return out;
 }

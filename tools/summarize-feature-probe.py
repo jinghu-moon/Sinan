@@ -43,7 +43,7 @@ evidence = {
     "isolation": "Dedicated /separate Explorer; only probe-owned acceptance folders and tabs",
     "tested_module_sha256": {
         name: hashlib.sha256((binaries / name).read_bytes()).hexdigest()
-        for name in ("tabtail-features.dll", "tabtail-style-0.7.dll")
+        for name in ("sinan-features.dll", "sinan-style.dll")
     },
     "native_checks_passed": raw["native_checks_passed"],
     "remove_result": raw["remove_result"],

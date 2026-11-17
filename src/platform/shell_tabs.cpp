@@ -10,7 +10,7 @@
 #include <set>
 #include "hook/features.hpp"
 
-namespace tabtail {
+namespace sinan {
 using Microsoft::WRL::ComPtr;
 namespace {
 class NativeObservationIdentity final:public IUnknown {

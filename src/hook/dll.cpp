@@ -11,7 +11,7 @@
 #include <cstring>
 #include <memory>
 
-namespace tabtail {
+namespace sinan {
 namespace {
 HMODULE self_module = nullptr;
 using SetTitle = void(WINAPI*)(void*, PCWSTR, GUID);
@@ -45,7 +45,10 @@ void verify_sender(const BridgePacket& packet) {
     if (!QueryFullProcessImageNameW(process.get(), 0, exe.data(), &n)) throw Error(4, "无法读取桥接客户端路径");
     exe.resize(n);
     std::error_code ec;
-    if (!fs::equivalent(fs::path(exe), fs::path(dll_path).parent_path() / L"tabtail.exe", ec) || ec) throw Error(4, "桥接客户端路径不匹配");
+    auto adjacent=fs::path(dll_path).parent_path();
+    bool agent=fs::equivalent(fs::path(exe),adjacent/L"sinan-agent.exe",ec)&&!ec;ec.clear();
+    bool diagnostic=fs::equivalent(fs::path(exe),adjacent/L"sinan.exe",ec)&&!ec;
+    if (!agent&&!(diagnostic&&packet.action==BridgeAction::probe)) throw Error(4, "桥接客户端路径不匹配");
     HANDLE peer_raw{}, current_raw{};
     if (!OpenProcessToken(process.get(), TOKEN_QUERY, &peer_raw)) throw Error(4, "无法验证桥接用户");
     Handle peer(peer_raw);
@@ -220,7 +223,7 @@ void protected_packet(BridgePacket* packet) {
     __except(EXCEPTION_EXECUTE_HANDLER) { packet->result = E_UNEXPECTED; InterlockedExchange(&packet->completed, 1); }
 }
 }
-extern "C" __declspec(dllexport) LRESULT CALLBACK TabTailWindowHook(int code, WPARAM wparam, LPARAM lparam) {
+extern "C" __declspec(dllexport) LRESULT CALLBACK SinanWindowHook(int code, WPARAM wparam, LPARAM lparam) {
     if (code >= 0) {
         const auto* message = reinterpret_cast<const CWPSTRUCT*>(lparam);
         if (message && message->message == RegisterWindowMessageW(bridge_message_name)) {
@@ -241,6 +244,6 @@ extern "C" __declspec(dllexport) LRESULT CALLBACK TabTailWindowHook(int code, WP
 }
 }
 BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID) {
-    if (reason == DLL_PROCESS_ATTACH) tabtail::self_module = module;
+    if (reason == DLL_PROCESS_ATTACH) sinan::self_module = module;
     return TRUE;
 }

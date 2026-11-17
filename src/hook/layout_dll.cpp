@@ -13,7 +13,7 @@
 
 // XAML diagnostics is used only for tab layout. No XAML private vtable offsets
 // or generated WinUI projections are needed; the runtime resolves properties.
-namespace tabtail::layout {
+namespace sinan::layout {
 using Microsoft::WRL::ComPtr;
 using Microsoft::WRL::RuntimeClass;
 using Microsoft::WRL::RuntimeClassFlags;
@@ -314,7 +314,7 @@ void initialize() {
     if(thread)CloseHandle(thread);else initialization=HRESULT_FROM_WIN32(GetLastError());
 }
 void execute(LayoutPacket& packet) {
-    verify_layout_sender(self,packet.sender_pid,packet.sender_started);
+    verify_layout_sender(self,packet.sender_pid,packet.sender_started,packet.action==LayoutAction::inspect);
     if(!native_inventory_supported())throw Error(3,"当前 Explorer 版本尚无布局适配");
     DWORD pid{};auto thread=GetWindowThreadProcessId(reinterpret_cast<HWND>(packet.window),&pid);
     if(pid!=GetCurrentProcessId()||thread!=GetCurrentThreadId()||bridge_process_started(GetCurrentProcess())!=packet.target_started)
@@ -375,12 +375,12 @@ void protected_process(LayoutPacket* packet) {
 }
 }
 STDAPI DllGetClassObject(REFCLSID clsid,REFIID iid,void** output) {
-    if(!output)return E_POINTER;*output=nullptr;if(clsid!=tabtail::layout::tap_class)return CLASS_E_CLASSNOTAVAILABLE;
-    auto factory=Microsoft::WRL::Make<tabtail::layout::Factory>();return factory?factory->QueryInterface(iid,output):E_OUTOFMEMORY;
+    if(!output)return E_POINTER;*output=nullptr;if(clsid!=sinan::layout::tap_class)return CLASS_E_CLASSNOTAVAILABLE;
+    auto factory=Microsoft::WRL::Make<sinan::layout::Factory>();return factory?factory->QueryInterface(iid,output):E_OUTOFMEMORY;
 }
 STDAPI DllCanUnloadNow(){return S_FALSE;}
-extern "C" __declspec(dllexport) LRESULT CALLBACK TabTailLayoutHook(int code,WPARAM wparam,LPARAM lparam) {
-    using namespace tabtail;
+extern "C" __declspec(dllexport) LRESULT CALLBACK SinanLayoutHook(int code,WPARAM wparam,LPARAM lparam) {
+    using namespace sinan;
     if(code>=0) {
         auto message=reinterpret_cast<const CWPSTRUCT*>(lparam);
         if(message&&message->message==RegisterWindowMessageW(layout_message)) {
@@ -398,5 +398,5 @@ extern "C" __declspec(dllexport) LRESULT CALLBACK TabTailLayoutHook(int code,WPA
     return CallNextHookEx(nullptr,code,wparam,lparam);
 }
 BOOL WINAPI DllMain(HINSTANCE module,DWORD reason,LPVOID) {
-    if(reason==DLL_PROCESS_ATTACH)tabtail::layout::self=module;return TRUE;
+    if(reason==DLL_PROCESS_ATTACH)sinan::layout::self=module;return TRUE;
 }

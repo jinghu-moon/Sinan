@@ -1,7 +1,7 @@
 #pragma once
 #include "platform/windows.hpp"
 
-namespace tabtail {
+namespace sinan {
 struct UserProcess {
     Handle process;
     Handle thread;

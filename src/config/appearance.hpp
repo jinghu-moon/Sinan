@@ -1,7 +1,7 @@
 #pragma once
 #include <string>
 
-namespace tabtail {
+namespace sinan {
 // Dimensions are device-independent pixels, before Windows display scaling.
 struct TabAppearance {
     std::string width_mode = "system";

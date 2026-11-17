@@ -7,7 +7,7 @@ import sys
 import tempfile
 
 exe = str(Path(sys.argv[1]).resolve())
-with tempfile.TemporaryDirectory(prefix="TabTail-agent-") as temporary:
+with tempfile.TemporaryDirectory(prefix="Sinan-agent-") as temporary:
     root = str(Path(temporary) / "中文 agent root")
 
     def call(*args, code=0):

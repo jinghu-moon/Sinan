@@ -1,13 +1,14 @@
 #include "agent/interaction.hpp"
+#include "ui/shortcut_recorder.hpp"
 #include <chrono>
 #include <future>
 #include <iostream>
-using namespace tabtail;
+using namespace sinan;
 using namespace std::chrono_literals;
 
 // Drive the same callback decision path on its actual owner thread without
 // SendInput, keyboard injection, Explorer changes or typing into user apps.
-namespace tabtail {
+namespace sinan {
 struct ShortcutInputTestAccess {
     static std::future<DWORD> ping(ExplorerShortcuts& shortcuts) {
         auto promise=std::make_shared<std::promise<DWORD>>();auto result=promise->get_future();

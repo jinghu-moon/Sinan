@@ -2,13 +2,13 @@
 #include "platform/windows.hpp"
 #include <vector>
 
-namespace tabtail {
+namespace sinan {
 inline uint64_t bridge_process_started(HANDLE process) {
     FILETIME c{}, e{}, k{}, u{};
     if (!GetProcessTimes(process, &c, &e, &k, &u)) throw Error(4, "无法验证进程创建时间");
     return (uint64_t(c.dwHighDateTime) << 32) | c.dwLowDateTime;
 }
-inline void verify_layout_sender(HMODULE module, DWORD pid, uint64_t started) {
+inline void verify_layout_sender(HMODULE module, DWORD pid, uint64_t started,bool read_only=false) {
     DWORD session{}, current{};
     if (!ProcessIdToSessionId(pid, &session) || !ProcessIdToSessionId(GetCurrentProcessId(), &current) || session != current)
         throw Error(4, "布局请求不属于当前会话");
@@ -20,8 +20,11 @@ inline void verify_layout_sender(HMODULE module, DWORD pid, uint64_t started) {
     if (!QueryFullProcessImageNameW(process.get(), 0, exe.data(), &n)) throw Error(4, "无法读取布局客户端路径");
     exe.resize(n);
     std::error_code ec;
-    if (!fs::equivalent(fs::path(exe), fs::path(path).parent_path() / L"tabtail.exe", ec) || ec)
-        throw Error(4, "布局客户端必须是相邻的 tabtail.exe");
+    auto adjacent=fs::path(path).parent_path();
+    bool agent=fs::equivalent(fs::path(exe),adjacent/L"sinan-agent.exe",ec)&&!ec;ec.clear();
+    bool diagnostic=fs::equivalent(fs::path(exe),adjacent/L"sinan.exe",ec)&&!ec;
+    if (!agent&&!(read_only&&diagnostic))
+        throw Error(4, "Bridge requires adjacent sinan-agent.exe; CLI is limited to read-only probes");
     HANDLE peer_raw{}, own_raw{};
     if (!OpenProcessToken(process.get(), TOKEN_QUERY, &peer_raw)) throw Error(4, "无法验证布局客户端用户");
     Handle peer(peer_raw);

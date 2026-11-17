@@ -5,7 +5,7 @@
 #include <map>
 #include <functional>
 
-namespace tabtail {
+namespace sinan {
 // STA-owned adapter. COM identities are held across scans to prevent pointer reuse.
 // The synthetic GUID is an observation lifetime ID, NOT Explorer's native tab GUID.
 class ShellTabTracker {

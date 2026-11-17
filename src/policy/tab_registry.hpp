@@ -9,7 +9,7 @@
 #include <string_view>
 #include <vector>
 
-namespace tabtail {
+namespace sinan {
 // Supplied by the Explorer adapter, once native identity/lifetimes are verified.
 // frame_id is an adapter identity, never a dereferenceable pointer in the CLI.
 struct TabIdentity {

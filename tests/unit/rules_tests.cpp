@@ -4,7 +4,7 @@
 #include "app/service.hpp"
 #include <iostream>
 
-using namespace tabtail;
+using namespace sinan;
 int main() {
     int checks=0;
     auto expect=[&](bool value,const char* name){++checks;if(!value)throw std::runtime_error(name);};
@@ -54,7 +54,7 @@ int main() {
         a.enabled=false;expect(RuleSet({a,b}).resolve({}, {},L"D:\\P\\src").rule_id=="b","disabled rule");
         rejects([&]{RuleSet duplicate({b,b});});
         auto huge=b;huge.patterns={L"D:\\P\\{a,b,c,d,e,f,g,h,i}\\{a,b,c,d,e,f,g,h,i}\\{a,b,c,d,e,f,g,h,i}"};rejects([&]{RuleSet over({huge});});
-        auto root=fs::temp_directory_path()/(L"TabTail-rules-"+std::to_wstring(GetCurrentProcessId()));
+        auto root=fs::temp_directory_path()/(L"Sinan-rules-"+std::to_wstring(GetCurrentProcessId()));
         fs::create_directories(root);ConfigStore store(root);
         atomic_write(store.path(),"schema_version=1\nrevision=5\nenabled=false\nautostart=false\n[display]\ndepth=2\nseparator='\\'\n");
         expect(store.load().revision==5&&store.load().rules.empty(),"legacy read without migration");

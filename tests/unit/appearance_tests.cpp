@@ -2,14 +2,14 @@
 #include "app/service.hpp"
 #include <iostream>
 
-using namespace tabtail;
+using namespace sinan;
 namespace {
 int checks=0;
 void expect(bool value,const char* message){++checks;if(!value)throw std::runtime_error(message);}
 template<class F>void rejects(F action){bool rejected=false;try{action();}catch(const Error& e){rejected=e.code==2;}expect(rejected,"invalid appearance accepted");}
 }
 int main(){
-    auto root=fs::temp_directory_path()/(L"TabTail-appearance-"+std::to_wstring(GetCurrentProcessId()));
+    auto root=fs::temp_directory_path()/(L"Sinan-appearance-"+std::to_wstring(GetCurrentProcessId()));
     try{
         ConfigStore store(root);auto c=store.load();expect(c.tabs.width_mode=="system","default must preserve Explorer layout");
         for(auto mode:{"system","fixed","content"}){

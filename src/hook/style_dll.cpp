@@ -22,7 +22,7 @@
 
 // All styling executes on the owning XAML thread. Native tab identity is
 // gated by verified module contracts; properties are resolved by diagnostics.
-namespace tabtail::style {
+namespace sinan::style {
 using Microsoft::WRL::ComPtr;
 using Microsoft::WRL::RuntimeClass;
 using Microsoft::WRL::RuntimeClassFlags;
@@ -659,7 +659,7 @@ Json visual_order(const NativeTab& tab) {
     throw Error(5,"Explorer TabItems order is not available for this window");
 }
 void execute(StylePacket& packet) {
-    verify_layout_sender(self,packet.sender_pid,packet.sender_started);
+    verify_layout_sender(self,packet.sender_pid,packet.sender_started,packet.action==StyleAction::inspect);
     if(!native_inventory_supported())throw Error(3,"Unsupported ExplorerFrame");
     DWORD pid{};auto thread=GetWindowThreadProcessId(reinterpret_cast<HWND>(packet.window),&pid);
     if(pid!=GetCurrentProcessId()||thread!=GetCurrentThreadId()||bridge_process_started(GetCurrentProcess())!=packet.target_started)throw Error(4,"Style target identity changed");
@@ -711,12 +711,12 @@ void protected_process(StylePacket* packet) {
 }
 }
 STDAPI DllGetClassObject(REFCLSID clsid,REFIID iid,void** output) {
-    if(!output)return E_POINTER;*output=nullptr;if(clsid!=tabtail::style::tap_class)return CLASS_E_CLASSNOTAVAILABLE;
-    auto factory=Microsoft::WRL::Make<tabtail::style::Factory>();return factory?factory->QueryInterface(iid,output):E_OUTOFMEMORY;
+    if(!output)return E_POINTER;*output=nullptr;if(clsid!=sinan::style::tap_class)return CLASS_E_CLASSNOTAVAILABLE;
+    auto factory=Microsoft::WRL::Make<sinan::style::Factory>();return factory?factory->QueryInterface(iid,output):E_OUTOFMEMORY;
 }
 STDAPI DllCanUnloadNow(){return S_FALSE;}
-extern "C" __declspec(dllexport) LRESULT CALLBACK TabTailStyleHook(int code,WPARAM wparam,LPARAM lparam) {
-    using namespace tabtail;
+extern "C" __declspec(dllexport) LRESULT CALLBACK SinanStyleHook(int code,WPARAM wparam,LPARAM lparam) {
+    using namespace sinan;
     if(code>=0) {
         auto message=reinterpret_cast<const CWPSTRUCT*>(lparam);
         if(message&&message->message==RegisterWindowMessageW(style_message)) {
@@ -734,5 +734,5 @@ extern "C" __declspec(dllexport) LRESULT CALLBACK TabTailStyleHook(int code,WPAR
     return CallNextHookEx(nullptr,code,wparam,lparam);
 }
 BOOL WINAPI DllMain(HINSTANCE module,DWORD reason,LPVOID) {
-    if(reason==DLL_PROCESS_ATTACH)tabtail::style::self=module;return TRUE;
+    if(reason==DLL_PROCESS_ATTACH)sinan::style::self=module;return TRUE;
 }

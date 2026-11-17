@@ -4,7 +4,7 @@
 #include <mutex>
 #include <objbase.h>
 
-namespace tabtail::compat {
+namespace sinan::compat {
 namespace {
 constexpr SymbolSpec view_specs[]{
     {"view_get","?get_FileExplorerTab@?$produce@UFileExplorerTabItemControlVM@implementation@FileExplorerExtensions@winrt@@UIFileExplorerTabItemControlVM@34@@impl@winrt@@UEAAHPEAPEAX@Z",true},
