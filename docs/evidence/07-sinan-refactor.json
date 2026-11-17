@@ -78,6 +78,31 @@
     "build/research/sinan-ctest.log",
     "build/research/sinan-headless-ctest.log",
     "build/research/sinan-offline-symbols.json",
-    "build/research/sinan-offline-reuse.json"
-  ]
+    "build/research/sinan-offline-reuse.json",
+    "build/research/sinan-ci-success.log"
+  ],
+  "github_ci": {
+    "code_commit": "23299a65495ffa513dbe039afb118e3a1ad0ad46",
+    "run_url": "https://github.com/jinghu-moon/Sinan/actions/runs/44193211183",
+    "conclusion": "success",
+    "full_tui": "success",
+    "without_tui": "success",
+    "package_smoke_and_artifact_upload": "success"
+  },
+  "ci_discovered_fix": {
+    "initial_run": "https://github.com/jinghu-moon/Sinan/actions/runs/44192207465",
+    "failure": "Invalid offline PDB left a staging directory",
+    "fix_commit": "23299a6",
+    "resolution": "Validate offline MSF header before DbgHelp; create and recursively clean only a new private staging directory; preserve unrelated cache content",
+    "verification": "Both local symbol regressions, three valid offline PDBs and both GitHub CI configurations passed"
+  },
+  "repository_audit": {
+    "tracked_files": 225,
+    "approximate_bytes": 2240500,
+    "files_over_5_mib": 0,
+    "credential_pattern_hits": 0,
+    "excluded_directories_tracked": 0,
+    "license": "MIT",
+    "visibility": "public"
+  }
 }

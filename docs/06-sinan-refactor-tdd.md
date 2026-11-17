@@ -1,6 +1,6 @@
 # 06：司南 Sinan 开发期架构重构与 TDD 执行文档
 
-状态：P0–P5 的本地实现与验证已完成；公开推送检查见执行记录。日期：2026-11-18。
+状态：P0–P5 全部完成，公开推送和 GitHub 两路 CI 已验证；记录见文末。日期：2026-11-18。
 
 ## 1. 目标、事实与取舍
 
@@ -155,7 +155,8 @@ cmake --build build/sinan-headless --config Release --parallel 6
 - P1 Red：旧版 `tabtail.exe` 运行新增 architecture 测试，失败于“CLI must be the renamed Sinan product”；新增应用测试失败于“Rule not found”。日志：`build/research/sinan-red-process.log`、`sinan-red-application.log`。这些失败先于生产结构修改。
 - P2 Green：namespace／品牌／产物／默认目录／配置／IPC 全部更名；独立 Agent、登录链路和完整分发清单已实现。客户端、后台快捷键与终端录入分离。CLI 消费共享应用层，不链接 Agent 实现。跨目录客户端及同目录未知角色拒绝测试均通过。
 - P3 Green：统一配置、预览、目录、快捷键、位置、宽度增量编辑和样式导入；动作目录含 14 项，支持双语、关键词和明确参数执行。53 个新增应用断言通过；未知／缺失请求、非法修改、重复入口和超大样式文件不写入配置。原有冲突和并发写入测试继续通过。
-- P4 Green：干净 `build/sinan` 完整构建成功；干净 `build/sinan-headless` 最初以 BUILD_TESTING=OFF 构建成功且无 FTXUI，随后开启测试复验。两种安装目录均通过完整八文件清单、许可证、本地命令和独立 Agent smoke；生成工程依赖与真实 PE imports 检查通过。修正了原 install 对被忽略截图／原始证据的依赖。Windows CI 配置完整／无 TUI 两路构建、CTest、安装、包 smoke 和 artifact；远端结果以 GitHub Actions 为准。
+- P4 Green：干净 `build/sinan` 完整构建成功；干净 `build/sinan-headless` 最初以 BUILD_TESTING=OFF 构建成功且无 FTXUI，随后开启测试复验。两种安装目录均通过完整八文件清单、许可证、本地命令和独立 Agent smoke；生成工程依赖与真实 PE imports 检查通过。修正了原 install 对被忽略截图／原始证据的依赖。Windows CI 完整／无 TUI 两路的构建、CTest、安装、包 smoke 和 artifact 上传均通过（见下方链接）。
 - P5 本地回归：完整 23/23 CTest 通过，约 20 秒；无 TUI 22/22 通过，约 11 秒；保留原 20 组业务测试，只有 headless 不构建 TUI 专项，规则测试按构建选项分别验收界面／无界面诊断。TUI 1747 个组件断言通过，保留双语、四字按钮和窄窗口。三个模块离线解析及缓存复用成功，29 个符号、network_used=false；没有执行用户 Explorer 注入／重启或接管旧代理。
 - 证据摘要：[07-sinan-refactor.json](evidence/07-sinan-refactor.json)。详细运行日志及渲染保留在忽略的 build/ 下；[Sinan 测试步骤](testing-sinan.md) 区分自动测试与真实交互验收。
-- 提交／推送：基线及本文已在公开 main；实现完成后提交并推送同一 main，保留原基线标签。不将新 GUI、脚本执行器或尚未实测的 Explorer 交互记为已验收。
+- CI 发现并修复：首轮远端测试发现无效离线 PDB 后临时目录残留；23299a6 增加离线 MSF 头验证，并只对新建的私有 staging 目录执行完整清理。保留原清理断言，增加具体错误校验和残留目录诊断；三个有效 PDB 的清理及无关缓存保留也复验通过。后续 [GitHub CI](https://github.com/jinghu-moon/Sinan/actions/runs/44193211183) 两路全部通过，包括安装、包 smoke 和产物上传。
+- 提交／推送：重构实现 39b4577、CI 修复 23299a6 已推送公开 main；保留 baseline-tabtail-v0.11.0。最终验收记录另以仅文档提交保存。225 个文件约 2.24 MB，未发现凭据模式、超过 5 MiB 的文件或被排除目录混入。MIT 与第三方声明齐备。不将新 GUI、脚本执行器或尚未实测的 Explorer 交互记为已验收。
