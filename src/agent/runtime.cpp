@@ -45,6 +45,9 @@ int run_observer_agent(const fs::path& root,bool from_login) {
     auto runtime_id = new_runtime_id();
     ShellTabTracker tracker(runtime_id, config);
     LayoutTracker layouts;
+    std::map<std::pair<DWORD,DWORD>,NativeTab> command_bar_targets;
+    Json command_bar_state={{"state","disabled"}};
+    Json command_bar_actions=Json::array();
     TabFeatures features;
     ExplorerShortcuts shortcuts;
     FolderClickListener folder_click;
@@ -210,6 +213,44 @@ int run_observer_agent(const fs::path& root,bool from_login) {
 #endif
         tray.update(true,{chinese_ui(),active,runtime_applied(),config.autostart,tui_available,native_build_supported()});
     };
+    auto synchronize_command_bar=[&](bool enabled) {
+        std::map<std::pair<DWORD,DWORD>,NativeTab> observed;
+        for(const auto& tab:tracker.shortcut_windows()) {
+            const auto thread=GetWindowThreadProcessId(tab.window,nullptr);
+            if(thread)observed[{tab.process_id,thread}]=tab;
+        }
+        std::erase_if(command_bar_targets,[](const auto& item) {
+            const auto& tab=item.second;
+            return process_lifetime(tab.process_id,tab.process_started)==ProcessLifetime::ended;
+        });
+        size_t applied=0,pending=0;
+        Json errors=Json::array();
+        Json filesystem_tabs=Json::array();
+        if(enabled&&config.command_bar.terminal)for(const auto& tab:tracker.list()) {
+            if(tab.at("observed").get<bool>()&&tab.at("path").is_string())
+                filesystem_tabs.push_back(tab.at("browser_window"));
+        }
+        for(const auto& [key,tab]:observed) {
+            if(!enabled&&!command_bar_targets.contains(key))continue;
+            if(enabled)command_bar_targets[key]=tab;
+            try {
+                auto report=send_layout_payload(tab,enabled?LayoutAction::command_bar_enable:LayoutAction::command_bar_disable,{},
+                    {{"settings",command_bar_json(config.command_bar)},{"chinese",chinese_ui()},{"filesystem_tabs",filesystem_tabs}});
+                if(report.value("pending",false)||(enabled&&report.at("bars").empty()))++pending;
+                else {
+                    ++applied;
+                    if(!enabled)command_bar_targets.erase(key);
+                }
+                if(enabled)for(auto& event:report.value("actions",Json::array())) {
+                    if(command_bar_actions.size()<64)command_bar_actions.push_back(std::move(event));
+                }
+            } catch(const std::exception& error) { errors.push_back(error.what()); }
+        }
+        if(!enabled)command_bar_actions.clear();
+        if(!enabled)for(const auto& [key,tab]:command_bar_targets)if(!observed.contains(key))++pending;
+        command_bar_state={{"state",!errors.empty()?"unavailable":pending?"pending":
+            !enabled?"disabled":applied?"applied":"waiting"},{"errors",std::move(errors)},{"applied_threads",applied}};
+    };
     auto synchronize=[&](bool restore_search=false) {
         feature_state=features.synchronize(tracker,config,active);
         update_shortcuts();
@@ -226,6 +267,7 @@ int run_observer_agent(const fs::path& root,bool from_login) {
         layout_state=layouts.synchronize(tracker.shortcut_windows(),
             {active?config.tabs:TabAppearance{},!restore_search&&config.search_box_hidden});
         layout_state["requested_mode"]=config.tabs.width_mode;
+        synchronize_command_bar(!restore_search&&config.command_bar.enabled);
         synchronize_search(!restore_search&&config.everything_search&&!config.search_box_hidden);
         synchronize_external_tabs(!restore_search&&config.external_tabs);
         folder_sizes.synchronize(restore_search ? FolderSizeSettings{} : config.folder_sizes,
@@ -299,7 +341,7 @@ int run_observer_agent(const fs::path& root,bool from_login) {
             {"folder_sizes",folder_sizes.status()},
             {"selection_summary",selection_summary.status()},
             {"external_tabs",external_tab_state},
-            {"directory_shortcuts",directory_shortcut_status()},{"last_directory_open",last_directory_open},{"automatic_restore",automatic_restore},{"features",feature_state},{"shortcuts",shortcut_status()},{"last_action",last_action},{"notifications",notifications.status()},{"layout",layout_state},
+            {"directory_shortcuts",directory_shortcut_status()},{"last_directory_open",last_directory_open},{"automatic_restore",automatic_restore},{"features",feature_state},{"shortcuts",shortcut_status()},{"last_action",last_action},{"notifications",notifications.status()},{"layout",layout_state},{"command_bar",command_bar_state},
             {"hook_available", native_build_supported()}, {"runtime_applied", runtime_applied()}, {"application", application}, {"scan_complete", scan_complete},
             {"tray",tray.status()},
             {"scan_error", scan_error}, {"config_error", config_error}, {"warnings", warnings},
@@ -771,6 +813,7 @@ int run_observer_agent(const fs::path& root,bool from_login) {
                 {"external_tabs",external_tab_state},
                 {"tray",tray.status()},
                 {"layout",layout_state},{"layout_applied",layout_state.value("layout_applied",false)},
+                {"command_bar",command_bar_state},
                 {"application", application},{"features",feature_state}, {"message", active ? "代理已接收并应用默认配置；请检查逐标签结果。" : "代理已接收默认配置；观察模式下未应用标题。"}};
         }
         if(command=="tabs.batch") {
@@ -1066,6 +1109,12 @@ int run_observer_agent(const fs::path& root,bool from_login) {
             }catch(const std::exception& ex){notifications.show(config.features.at("notifications").at("mode"),ex.what(),target,true);}
         }
         if (!stopping && GetTickCount64() - last_scan >= scan_interval_ms) { reload(); scan(); confirm_reopen(); synchronize(); }
+        for(const auto& event:std::exchange(command_bar_actions,Json::array()))try {
+            auto frame=reinterpret_cast<HWND>(event.at("window").get<uint64_t>());
+            auto child=reinterpret_cast<HWND>(event.at("child").get<uint64_t>());
+            if(!child||GetForegroundWindow()!=frame||!IsWindowVisible(child))continue;
+            run_action({{"command","explorer.open_terminal"}},frame,child);
+        }catch(const std::exception& error){notifications.show(config.features.at("notifications").at("mode"),error.what(),"",true);}
     }
     return 0;
 }

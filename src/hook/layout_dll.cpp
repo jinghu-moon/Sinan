@@ -9,6 +9,7 @@
 #include <weakreference.h>
 #include <wrl.h>
 #include <winrt/base.h>
+#include <winrt/Windows.Foundation.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -75,6 +76,7 @@ struct SavedProperty {
     unsigned index = 0;
     bool local = false;
     ComPtr<IInspectable> value;
+    int32_t original_enum = 0;
 };
 enum class ElementKind { tab_view, tab_item, search_box, address_grid };
 struct SavedColumnSpan {
@@ -108,6 +110,11 @@ struct CommandBar {
     ComPtr<IWeakReference> observed_commands;
     EventRegistrationToken vector_changed{};
     std::optional<int32_t> original_overflow;
+    ComPtr<IWeakReference> terminal;
+    EventRegistrationToken terminal_click{};
+    std::vector<Element> customized;
+    std::vector<ComPtr<IWeakReference>> added_tooltips;
+    std::optional<CommandBarSettings> applied_settings;
     bool attached = true;
 };
 thread_local std::map<InstanceHandle, CommandBar> command_bars;
@@ -115,6 +122,11 @@ thread_local DWORD command_bar_owner = 0;
 thread_local uint64_t command_bar_owner_started = 0, command_bar_expires = 0;
 thread_local UINT_PTR command_bar_lease_timer = 0, command_bar_refresh_timer = 0;
 thread_local bool probe_hide_more = false;
+thread_local std::optional<CommandBarSettings> command_bar_settings;
+thread_local bool command_bar_chinese = true;
+thread_local std::vector<uintptr_t> command_bar_filesystem_tabs;
+thread_local HWND command_bar_window = nullptr;
+thread_local Json pending_command_bar_actions=Json::array();
 // The pinned runtime uses the IInspectable identity pointer as its handle.
 // An older diagnostics listener can unregister the shared cache before our
 // callback runs. QI is guarded and used only for handles received from XAML,
@@ -166,6 +178,79 @@ bool has_name(IInspectable* object,std::wstring_view expected) {
         SUCCEEDED(element->get_Name(winrt::put_abi(name)))&&std::wstring_view(name)==expected;
 }
 
+std::wstring automation_id(IInspectable* item) {
+    auto automation=xaml_factory<IXamlAutomationProperties>(L"Microsoft.UI.Xaml.Automation.AutomationProperties");
+    ComPtr<IInspectable> dependency;
+    winrt::hstring text;
+    if(automation&&SUCCEEDED(item->QueryInterface(xaml_dependency_object,&dependency)))
+        automation->GetAutomationId(dependency.Get(),reinterpret_cast<HSTRING*>(winrt::put_abi(text)));
+    return std::wstring(text);
+}
+
+std::wstring icon_resource(IInspectable* item, Json* detail = nullptr) {
+    ComPtr<IXamlAppBarButton> button;
+    ComPtr<IInspectable> icon, uri, source;
+    if(FAILED(item->QueryInterface(IID_PPV_ARGS(&button)))||FAILED(button->get_Icon(&icon))||!icon)return {};
+    const auto describe=[&](const char* key,IInspectable* object) {
+        if(!detail||!object)return;
+        winrt::hstring text;
+        if(SUCCEEDED(object->GetRuntimeClassName(reinterpret_cast<HSTRING*>(winrt::put_abi(text)))))
+            (*detail)[key]=utf8(std::wstring_view(text));
+    };
+    describe("icon_type",icon.Get());
+    ComPtr<IXamlBitmapIcon> bitmap;
+    if(has_type(icon.Get(),L"Microsoft.UI.Xaml.Controls.BitmapIcon")&&SUCCEEDED(icon.As(&bitmap)))bitmap->get_UriSource(&uri);
+    else {
+        ComPtr<IXamlImageIcon> image;
+        ComPtr<IXamlIconSourceElement> source_element;
+        const auto image_interface=icon.As(&image);
+        if(SUCCEEDED(image_interface)) {
+            const auto source_result=image->get_Source(&source);
+            if(detail)(*detail)["source_result"]=source_result;
+        } else if(detail)(*detail)["image_interface"]=image_interface;
+        if(!image&&SUCCEEDED(icon.As(&source_element))) {
+            ComPtr<IInspectable> inner;
+            ComPtr<IXamlImageIconSource> image_source;
+            if(SUCCEEDED(source_element->get_IconSource(&inner))&&inner&&SUCCEEDED(inner.As(&image_source)))
+                image_source->get_ImageSource(&source);
+            describe("icon_source_type",inner.Get());
+        }
+        describe("image_type",source.Get());
+        ComPtr<IXamlSvgImageSource> svg;
+        if(source&&SUCCEEDED(source.As(&svg)))svg->get_UriSource(&uri);
+    }
+    ComPtr<ABI::Windows::Foundation::IUriRuntimeClass> runtime_uri;
+    winrt::hstring path;
+    if(!uri||FAILED(uri.As(&runtime_uri))||FAILED(runtime_uri->get_RawUri(reinterpret_cast<HSTRING*>(winrt::put_abi(path)))))return {};
+    const auto value=std::wstring_view(path);
+    const auto slash=value.find_last_of(L'/');
+    auto resource=std::wstring(value.substr(slash==value.npos?0:slash+1));
+    std::transform(resource.begin(),resource.end(),resource.begin(),[](wchar_t c){return static_cast<wchar_t>(towlower(c));});
+    return resource;
+}
+
+Json inspect_bar_items(IXamlCommandVector& commands, const Api& api) {
+    uint32_t count=0;
+    winrt::check_hresult(commands.get_Size(&count));
+    Json result=Json::array();
+    for(uint32_t index=0;index<count;++index) {
+        ComPtr<IXamlCommandBarElement> item;
+        winrt::check_hresult(commands.GetAt(index,&item));
+        Registered instance(item.Get(),api.diag.Get(),api.life.Get());
+        Chain chain(api.tree.Get(),instance.handle);
+        Json row={{"index",index},{"automation_id",utf8(automation_id(item.Get()))}};
+        row["icon_resource"]=utf8(icon_resource(item.Get(),&row));
+        for(const auto* name:{L"Name",L"AutomationId",L"Label",L"Visibility",L"Icon",L"LabelPosition"}) {
+            if(const auto* property=chain.find(name);property&&property->Value)row[utf8(name)]=utf8(property->Value);
+        }
+        winrt::hstring type;
+        if(SUCCEEDED(item->GetRuntimeClassName(reinterpret_cast<HSTRING*>(winrt::put_abi(type)))))
+            row["type"]=utf8(std::wstring_view(type));
+        result.push_back(std::move(row));
+    }
+    return result;
+}
+
 ComPtr<IXamlCommandVector> primary_commands(IInspectable* element) {
     ComPtr<IXamlCommandBar> bar;
     ComPtr<IInspectable> commands;
@@ -191,6 +276,81 @@ ComPtr<IInspectable> resolve_weak(const ComPtr<IWeakReference>& weak) {
 }
 
 void queue_command_bar_refresh();
+void apply_system_commands(CommandBar&, IInspectable*, IXamlCommandVector*, bool);
+
+HWND visible_browser(HWND window) {
+    HWND child=nullptr;
+    do { child=FindWindowExW(window,child,L"ShellTabWindowClass",nullptr); } while(child&&!IsWindowVisible(child));
+    return child;
+}
+
+class TerminalClick final : public RuntimeClass<RuntimeClassFlags<Microsoft::WRL::ClassicCom>,IXamlRoutedEventHandler> {
+public:
+    HRESULT STDMETHODCALLTYPE Invoke(IInspectable*,IInspectable*) override {
+        try {
+            if(command_bar_expires<=GetTickCount64()||!command_bar_settings||!command_bar_settings->terminal||
+                pending_command_bar_actions.size()>=16)return S_OK;
+            const auto window=GetAncestor(GetActiveWindow(),GA_ROOT);
+            if(!window||window!=GetForegroundWindow()||GetWindowThreadProcessId(window,nullptr)!=GetCurrentThreadId())return S_OK;
+            const auto child=visible_browser(window);
+            if(child)pending_command_bar_actions.push_back({{"window",reinterpret_cast<uintptr_t>(window)},
+                {"child",reinterpret_cast<uintptr_t>(child)}});
+        }catch(...){return winrt::to_hresult();}
+        return S_OK;
+    }
+};
+
+void apply_terminal(CommandBar& record, IXamlCommandVector& commands, bool desired) {
+    auto item=resolve_weak(record.terminal);
+    ComPtr<IXamlCommandBarElement> element;
+    uint32_t index{};
+    bool present=false;
+    if(item) {
+        winrt::check_hresult(item.As(&element));
+        winrt::check_hresult(commands.IndexOf(element.Get(),&index,&present));
+    }
+    if(!desired) {
+        if(item) {
+            ComPtr<IXamlButtonBase> button;
+            winrt::check_hresult(item.As(&button));
+            winrt::check_hresult(button->remove_Click(record.terminal_click));
+            if(present)winrt::check_hresult(commands.RemoveAt(index));
+        }
+        record.terminal.Reset();
+        return;
+    }
+    if(!item) {
+        auto reader=xaml_factory<style::IXamlReader>(L"Microsoft.UI.Xaml.Markup.XamlReader");
+        if(!reader)winrt::throw_hresult(E_NOINTERFACE);
+        const std::wstring caption=command_bar_chinese?L"在此打开终端":L"Open terminal here";
+        const winrt::hstring markup(L"<AppBarButton xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" "
+            L"AutomationProperties.AutomationId=\"SinanOpenTerminal\" AutomationProperties.Name=\""+caption+
+            L"\" ToolTipService.ToolTip=\""+caption+L"\" LabelPosition=\"Collapsed\">"
+            L"<AppBarButton.Icon><FontIcon FontFamily=\"Segoe Fluent Icons\" Glyph=\"&#xE756;\" />"
+            L"</AppBarButton.Icon></AppBarButton>");
+        winrt::check_hresult(reader->Load(static_cast<HSTRING>(winrt::get_abi(markup)),&item));
+        winrt::check_hresult(item.As(&element));
+        ComPtr<IXamlButtonBase> button;
+        winrt::check_hresult(item.As(&button));
+        auto handler=Microsoft::WRL::Make<TerminalClick>();
+        if(!handler)winrt::throw_hresult(E_OUTOFMEMORY);
+        auto weak=weak_reference(item.Get());
+        winrt::check_hresult(button->add_Click(handler.Get(),&record.terminal_click));
+        record.terminal=std::move(weak);
+    }
+    ComPtr<IXamlAppBarButton> button;
+    winrt::check_hresult(item.As(&button));
+    const winrt::hstring label(command_bar_chinese?L"在此打开终端":L"Open terminal here");
+    winrt::check_hresult(button->put_Label(static_cast<HSTRING>(winrt::get_abi(label))));
+    const auto child=reinterpret_cast<uintptr_t>(visible_browser(command_bar_window));
+    const bool can_open=child&&std::find(command_bar_filesystem_tabs.begin(),command_bar_filesystem_tabs.end(),child)!=command_bar_filesystem_tabs.end();
+    ComPtr<IXamlControl> control;
+    winrt::check_hresult(item.As(&control));
+    bool enabled=false;
+    winrt::check_hresult(control->get_IsEnabled(&enabled));
+    if(enabled!=can_open)winrt::check_hresult(control->put_IsEnabled(can_open));
+    if(!present)winrt::check_hresult(commands.Append(element.Get()));
+}
 
 class CommandsChanged final : public RuntimeClass<RuntimeClassFlags<Microsoft::WRL::ClassicCom>,IXamlCommandsChanged> {
 public:
@@ -232,7 +392,7 @@ ComPtr<IInspectable> new_probe_button(bool secondary, size_t slot) {
     return result;
 }
 
-Json refresh_command_bars(std::optional<bool> enabled, bool measure = false) {
+Json refresh_command_bars(std::optional<bool> enabled, bool measure = false, bool inspect_items = false) {
     Json result = Json::array();
     for (auto& [handle, record] : command_bars) {
         auto bar = resolve_weak(record.element);
@@ -245,6 +405,11 @@ Json refresh_command_bars(std::optional<bool> enabled, bool measure = false) {
         }
         auto commands = primary_commands(bar.Get());
         if (apply==true) observe_commands(record,commands.Get());
+        if(apply) {
+            if(command_bar_settings||!record.customized.empty())apply_system_commands(record,bar.Get(),commands.Get(),*apply&&command_bar_settings.has_value());
+            if(record.secondary&&(command_bar_settings||record.terminal))
+                apply_terminal(record,*commands.Get(),*apply&&command_bar_settings&&command_bar_settings->terminal);
+        }
         ComPtr<IXamlCommandBar> control;
         int32_t more_visibility=0;
         if (!record.secondary) {
@@ -270,7 +435,7 @@ Json refresh_command_bars(std::optional<bool> enabled, bool measure = false) {
                 winrt::check_hresult(element.As(&probe));
                 winrt::check_hresult(commands->IndexOf(probe.Get(),&index,&present));
             }
-            if(apply==true&&!present) {
+            if(apply==true&&!command_bar_settings&&!present) {
                 element=new_probe_button(record.secondary,slot);
                 winrt::check_hresult(element.As(&probe));
                 weak=weak_reference(element.Get());
@@ -291,7 +456,9 @@ Json refresh_command_bars(std::optional<bool> enabled, bool measure = false) {
         uint32_t count = 0;
         winrt::check_hresult(commands->get_Size(&count));
         result.push_back({{"bar", record.secondary ? "right" : "left"}, {"commands", count},
-                          {"probes", probes}, {"overflow", overflow}, {"more_visibility", more_visibility}});
+                          {"probes", probes}, {"overflow", overflow}, {"more_visibility", more_visibility},
+                          {"terminal",static_cast<bool>(resolve_weak(record.terminal))}});
+        if(inspect_items)result.back()["items"]=inspect_bar_items(*commands.Get(),Api{});
     }
     if(enabled)std::erase_if(command_bars,[](const auto& item){return !item.second.attached;});
     return result;
@@ -311,6 +478,10 @@ void CALLBACK restore_command_bar_timer(HWND, UINT, UINT_PTR id, DWORD) {
     command_bar_lease_timer = 0;
     command_bar_owner = 0;
     command_bar_owner_started = command_bar_expires = 0;
+    command_bar_settings.reset();
+    command_bar_filesystem_tabs.clear();
+    command_bar_window=nullptr;
+    pending_command_bar_actions.clear();
 }
 
 void queue_command_bar_refresh() {
@@ -477,6 +648,172 @@ void restore_element(Element& element, Api& api, InstanceHandle handle) {
         else winrt::check_hresult(api.tree->ClearProperty(handle,p.index));
     }
     element.saved.clear();
+}
+
+std::string_view system_command_id(IInspectable* item) {
+    const auto id=automation_id(item);
+    if(id==L"DetailsPaneToggleButton")return "details";
+    if(id==L"SortAndGroupButton")return "sort";
+    const auto resource=icon_resource(item);
+    if(resource.starts_with(L"windows.iconsize."))return "view";
+    static constexpr std::pair<std::wstring_view,std::string_view> known[]{
+        {L"windows.newitem.svg","new"},{L"windows.cut.svg","cut"},{L"windows.copy.svg","copy"},
+        {L"windows.paste.svg","paste"},{L"windows.rename.svg","rename"},{L"windows.modernshare.svg","share"},
+        {L"windows.ribbondelete.svg","delete"},{L"sortby.svg","sort"},{L"view.svg","view"},
+        {L"windows.compressedfile.extract.svg","extract_all"},{L"windows.setdesktopwallpaper.svg","set_background"},
+        {L"windows.rotate270.svg","rotate_left"},{L"windows.rotate90.svg","rotate_right"}};
+    for(const auto& [svg,key]:known)if(svg==resource)return key;
+    return {};
+}
+
+void set_command_property(IInspectable* item,std::wstring_view name,int32_t desired,int32_t* prior=nullptr) {
+    if(name==L"LabelPosition") {
+        ComPtr<IXamlAppBarButton> button;
+        winrt::check_hresult(item->QueryInterface(IID_PPV_ARGS(&button)));
+        if(prior)winrt::check_hresult(button->get_LabelPosition(prior));
+        winrt::check_hresult(button->put_LabelPosition(desired));
+    } else if(name==L"OverflowButtonVisibility") {
+        ComPtr<IXamlCommandBar> bar;
+        winrt::check_hresult(item->QueryInterface(IID_PPV_ARGS(&bar)));
+        if(prior)winrt::check_hresult(bar->get_OverflowButtonVisibility(prior));
+        winrt::check_hresult(bar->put_OverflowButtonVisibility(desired));
+    } else {
+        ComPtr<IXamlElement> view;
+        winrt::check_hresult(item->QueryInterface(IID_PPV_ARGS(&view)));
+        if(prior)winrt::check_hresult(view->get_Visibility(prior));
+        winrt::check_hresult(view->put_Visibility(desired));
+    }
+}
+
+void ensure_command_tooltip(CommandBar& record, IInspectable* item);
+
+void customize_command_property(CommandBar& record,Api& api,IInspectable* item,const wchar_t* name) {
+    const int32_t desired=std::wstring_view(name)==L"OverflowButtonVisibility"?2:1;
+    ComPtr<IInspectable> identity;
+    winrt::check_hresult(item->QueryInterface(IID_PPV_ARGS(&identity)));
+    auto saved=std::find_if(record.customized.begin(),record.customized.end(),[&](const Element& entry){
+        return resolve(entry).Get()==identity.Get();
+    });
+    if(saved==record.customized.end()) {
+        Element entry;
+        entry.weak=weak_reference(item);
+        record.customized.push_back(std::move(entry));
+        saved=std::prev(record.customized.end());
+    }
+    if(saved->saved.contains(name)) {
+        if(std::wstring_view(name)==L"Visibility")set_command_property(item,name,desired);
+        return;
+    }
+    Registered handle(item,api.diag.Get(),api.life.Get());
+    Chain chain(api.tree.Get(),handle.handle);
+    const auto* property=chain.find(name);
+    if(!property||property->PropertyChainIndex>=chain.sources_count)winrt::throw_hresult(E_NOTIMPL);
+    if(property->MetadataBits&IsValueBindingExpression)winrt::throw_hresult(HRESULT_FROM_WIN32(ERROR_NOT_SUPPORTED));
+    SavedProperty value;
+    value.index=property->Index;
+    value.local=chain.sources[property->PropertyChainIndex].Source==BaseValueSourceLocal;
+    if(std::wstring_view(name)==L"LabelPosition")ensure_command_tooltip(record,item);
+    set_command_property(item,name,desired,&value.original_enum);
+    saved->saved.emplace(name,std::move(value));
+}
+
+void restore_command_properties(CommandBar& record, Api& api) {
+    if(!record.added_tooltips.empty()) {
+        auto tooltips=xaml_factory<style::IToolTipStatics>(L"Microsoft.UI.Xaml.Controls.ToolTipService");
+        if(!tooltips)winrt::throw_hresult(E_NOINTERFACE);
+        for(const auto& weak:record.added_tooltips) {
+            const auto item=resolve_weak(weak);
+            if(!item)continue;
+            ComPtr<IInspectable> dependency;
+            winrt::check_hresult(item->QueryInterface(xaml_dependency_object,&dependency));
+            winrt::check_hresult(tooltips->SetToolTip(dependency.Get(),nullptr));
+        }
+        record.added_tooltips.clear();
+    }
+    for(auto& entry:record.customized) {
+        auto item=resolve(entry);
+        if(!item)continue;
+        Registered handle(item.Get(),api.diag.Get(),api.life.Get());
+        for(const auto& [name,value]:entry.saved) {
+            if(value.local)set_command_property(item.Get(),name,value.original_enum);
+            else winrt::check_hresult(api.tree->ClearProperty(handle.handle,value.index));
+        }
+        entry.saved.clear();
+    }
+    record.customized.clear();
+    record.applied_settings.reset();
+}
+
+void ensure_command_tooltip(CommandBar& record, IInspectable* item) {
+    auto tooltips=xaml_factory<style::IToolTipStatics>(L"Microsoft.UI.Xaml.Controls.ToolTipService");
+    if(!tooltips)winrt::throw_hresult(E_NOINTERFACE);
+    ComPtr<IInspectable> dependency, tooltip;
+    ComPtr<IXamlAppBarButton> button;
+    winrt::check_hresult(item->QueryInterface(xaml_dependency_object,&dependency));
+    winrt::check_hresult(tooltips->GetToolTip(dependency.Get(),reinterpret_cast<void**>(tooltip.GetAddressOf())));
+    if(tooltip)return;
+    winrt::check_hresult(item->QueryInterface(IID_PPV_ARGS(&button)));
+    winrt::hstring label;
+    winrt::check_hresult(button->get_Label(reinterpret_cast<HSTRING*>(winrt::put_abi(label))));
+    if(label.empty())return;
+    const auto text=winrt::box_value(label);
+    auto weak=weak_reference(item);
+    winrt::check_hresult(tooltips->SetToolTip(dependency.Get(),winrt::get_abi(text)));
+    record.added_tooltips.push_back(std::move(weak));
+}
+
+bool collapsed_visibility(std::wstring_view value);
+void apply_system_commands(CommandBar& record,IInspectable* bar,IXamlCommandVector* commands,bool enabled) {
+    Api api;
+    if(!enabled) {
+        restore_command_properties(record,api);
+        return;
+    }
+    const auto& settings=*command_bar_settings;
+    if(record.applied_settings!=settings)restore_command_properties(record,api);
+    record.applied_settings=settings;
+    const auto contains=[](const auto& group,std::string_view id) {
+        return !id.empty()&&std::find(group.begin(),group.end(),id)!=group.end();
+    };
+    const auto hide=[&](IInspectable* item) {
+        Registered handle(item,api.diag.Get(),api.life.Get());
+        Chain chain(api.tree.Get(),handle.handle);
+        const auto* current=chain.find(L"Visibility");
+        if(current&&current->Value&&collapsed_visibility(current->Value))return;
+        customize_command_property(record,api,item,L"Visibility");
+    };
+    if(!record.secondary&&contains(settings.hidden,"more"))
+        customize_command_property(record,api,bar,L"OverflowButtonVisibility");
+    if(settings.hidden.empty()&&settings.icon_only.empty()&&settings.hidden_separators.empty())return;
+    uint32_t size=0;
+    winrt::check_hresult(commands->get_Size(&size));
+    std::string_view previous;
+    ComPtr<IXamlCommandBarElement> trailing_separator;
+    ComPtr<IXamlCommandBarElement> group_separator;
+    bool group_visible=false;
+    for(uint32_t index=0;index<size;++index) {
+        ComPtr<IXamlCommandBarElement> item;
+        winrt::check_hresult(commands->GetAt(index,&item));
+        if(has_type(item.Get(),L"Microsoft.UI.Xaml.Controls.AppBarSeparator")) {
+            if(group_separator&&!group_visible)hide(group_separator.Get());
+            const auto id=previous=="new"?"after_new":previous=="delete"?"after_delete":"";
+            if(contains(settings.hidden_separators,id))hide(item.Get());
+            trailing_separator=item;
+            group_separator=item;
+            group_visible=false;
+            continue;
+        }
+        previous=system_command_id(item.Get());
+        if(contains(settings.hidden,previous))hide(item.Get());
+        else if(group_separator) {
+            Registered handle(item.Get(),api.diag.Get(),api.life.Get());
+            Chain chain(api.tree.Get(),handle.handle);
+            const auto visibility=chain.find(L"Visibility");
+            group_visible=group_visible||!visibility||!visibility->Value||!collapsed_visibility(visibility->Value);
+        }
+        if(contains(settings.icon_only,previous))customize_command_property(record,api,item.Get(),L"LabelPosition");
+    }
+    if(!record.secondary&&trailing_separator&&contains(settings.hidden_separators,"before_more"))hide(trailing_separator.Get());
 }
 bool collapsed_visibility(std::wstring_view value) {
     return value==L"Collapsed"||value==L"1";
@@ -732,6 +1069,12 @@ void execute(LayoutPacket& packet) {
                 if(!native_inventory_supported())throw Error(3,"Explorer build does not support command bar inspection");
                 const auto request=Json::parse(packet.report,nullptr,false);
                 probe_hide_more=request.is_object()&&request.value("hide_more",false);
+                if(request.is_object()&&request.contains("settings")) {
+                    command_bar_settings=command_bar_from_json(request.at("settings"));
+                    command_bar_chinese=request.value("chinese",true);
+                    command_bar_filesystem_tabs=request.value("filesystem_tabs",std::vector<uintptr_t>{});
+                    command_bar_window=reinterpret_cast<HWND>(packet.window);
+                } else command_bar_settings.reset();
                 if(!command_bar_lease_timer) {
                     command_bar_lease_timer=SetTimer(nullptr,0,1000,restore_command_bar_timer);
                     if(!command_bar_lease_timer)winrt::throw_last_error();
@@ -745,9 +1088,12 @@ void execute(LayoutPacket& packet) {
             }
         }
         operation="command bar";
-        auto bars=refresh_command_bars(change,true);
+        const auto request=Json::parse(packet.report,nullptr,false);
+        auto bars=refresh_command_bars(change,true,request.is_object()&&request.value("inspect_items",false));
         if(change==false&&command_bar_lease_timer)restore_command_bar_timer(nullptr,0,command_bar_lease_timer,0);
-        const auto report=Json{{"bars",std::move(bars)},{"discovery_error",last_error}}.dump();
+        auto result=Json{{"bars",std::move(bars)},{"discovery_error",last_error}};
+        if(change==true)result["actions"]=std::exchange(pending_command_bar_actions,Json::array());
+        const auto report=result.dump();
         if(report.size()>=sizeof(packet.report))throw Error(2,"Command bar report too large");
         strcpy_s(packet.report,report.c_str());
         packet.result=S_OK;

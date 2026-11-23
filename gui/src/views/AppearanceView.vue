@@ -11,6 +11,7 @@ import 'tdesign-vue-next/es/select/style/index.css'
 import { computed, onMounted, ref } from 'vue'
 import { toast } from 'vue-sonner'
 import { hasSettingsHost, requestSettings, type AppearanceSettings } from '../settingsHost'
+import CommandBarSettings from './CommandBarSettings.vue'
 
 const defaults: AppearanceSettings = {
   depth: '2',
@@ -281,6 +282,7 @@ onMounted(() => load())
       </div>
     </div>
   </main>
+  <CommandBarSettings />
 </template>
 
 <style scoped>

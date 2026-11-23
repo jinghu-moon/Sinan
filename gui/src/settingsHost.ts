@@ -127,7 +127,17 @@ export type SelectionSummarySettings = {
   show_size: boolean
 }
 
+export type CommandBarSettings = {
+  enabled: boolean
+  terminal: boolean
+  hidden: string[]
+  icon_only: string[]
+  hidden_separators: string[]
+}
+
 export type SettingsRequest =
+  | { action: 'command-bar.get' }
+  | { action: 'command-bar.save'; settings: CommandBarSettings; expected: CommandBarSettings }
   | { action: 'folder-sizes.set'; settings: FolderSizeSettings }
   | { action: 'selection-summary.set'; settings: SelectionSummarySettings }
   | {
@@ -222,6 +232,8 @@ type Reply = {
     title_applied?: boolean
     state_confirmed?: boolean
     apply_error?: string
+    command_bar?: CommandBarSettings
+    command_bar_application?: { state: string; errors?: string[] }
   }
   state?: GeneralState
   refresh_error?: string

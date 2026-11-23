@@ -58,6 +58,34 @@ SelectionSummarySettings selection_summary_from_json(const Json& value) {
     return {value.value("show_files", true), value.value("show_folders", true), value.value("show_size", true)};
 }
 
+Json command_bar_json(const CommandBarSettings& settings) {
+    return {{"enabled",settings.enabled},{"terminal",settings.terminal},{"hidden",settings.hidden},
+        {"icon_only",settings.icon_only},{"hidden_separators",settings.hidden_separators}};
+}
+
+CommandBarSettings command_bar_from_json(const Json& value) {
+    keys(value,{"enabled","terminal","hidden","icon_only","hidden_separators"});
+    CommandBarSettings settings;
+    const auto read_list=[&](const char* key,const auto& allowed) {
+        const auto items=value.value(key,std::vector<std::string>{});
+        std::vector<std::string> result;
+        for(const auto& item:items) {
+            if(std::find(std::begin(allowed),std::end(allowed),item)==std::end(allowed))
+                throw Error(2,std::string("Invalid command bar item: ")+item);
+            if(std::find(result.begin(),result.end(),item)!=result.end())
+                throw Error(2,std::string("Duplicate command bar item: ")+item);
+            result.push_back(item);
+        }
+        return result;
+    };
+    settings.enabled=value.value("enabled",false);
+    settings.terminal=value.value("terminal",true);
+    settings.hidden=read_list("hidden",command_bar_buttons);
+    settings.icon_only=read_list("icon_only",command_bar_labels);
+    settings.hidden_separators=read_list("hidden_separators",command_bar_separators);
+    return settings;
+}
+
 Json folder_sizes_json(const FolderSizeSettings& settings, bool text_bytes) {
     return {{"enabled", settings.enabled}, {"unit_mode", settings.unit_mode},
         {"unit_system", settings.unit_system}, {"decimal_places", settings.decimal_places},
@@ -141,6 +169,7 @@ void validate_config(const Config& config) {
     validate_appearance(config.tabs);
     folder_sizes_from_json(folder_sizes_json(config.folder_sizes));
     selection_summary_from_json(selection_summary_json(config.selection_summary));
+    command_bar_from_json(command_bar_json(config.command_bar));
     validate_features(config.features);
     try { validate_display(config.display_options()); RuleSet compiled(config.rules); }
     catch (const PolicyError& e) { throw Error(2, e.what()); }
@@ -160,12 +189,13 @@ Json config_json(const Config& c) {
     if(c.show_tray_icon)out["ui"]["show_tray_icon"]=true;
     if (c.folder_sizes != FolderSizeSettings{}) out["folder_sizes"] = folder_sizes_json(c.folder_sizes);
     if (c.selection_summary != SelectionSummarySettings{}) out["selection_summary"] = selection_summary_json(c.selection_summary);
+    if (c.command_bar != CommandBarSettings{}) out["command_bar"] = command_bar_json(c.command_bar);
     for(auto it=c.features.begin();it!=c.features.end();++it)out[it.key()]=it.value();
     return out;
 }
 Config config_from_json(const Json& table) {
     try {
-        keys(table,{"schema_version","revision","enabled","autostart","display","ui","rules","appearance","navigation","shortcuts","notifications","tab_behavior","tab_style","restore","directories","scripts","archives","folder_sizes","selection_summary"});
+        keys(table,{"schema_version","revision","enabled","autostart","display","ui","rules","appearance","navigation","shortcuts","notifications","tab_behavior","tab_style","restore","directories","scripts","archives","folder_sizes","selection_summary","command_bar"});
         if(!table.at("schema_version").is_number_integer()) throw Error(2,"Invalid schema_version");
         if(table.at("schema_version")!=1&&table.at("schema_version")!=2&&table.at("schema_version")!=3&&table.at("schema_version")!=4)throw Error(2,"Unsupported schema_version");
         auto schema=table.at("schema_version").get<int>();if(schema!=1&&schema!=2&&schema!=3&&schema!=4) throw Error(2,"Unsupported schema_version");
@@ -214,6 +244,7 @@ Config config_from_json(const Json& table) {
         }
         if (table.contains("folder_sizes")) c.folder_sizes = folder_sizes_from_json(table.at("folder_sizes"));
         if (table.contains("selection_summary")) c.selection_summary = selection_summary_from_json(table.at("selection_summary"));
+        if (table.contains("command_bar")) c.command_bar = command_bar_from_json(table.at("command_bar"));
         validate_config(c);return c;
     } catch(const Json::exception& e){throw Error(2,std::string("Invalid configuration: ")+e.what());}
 }

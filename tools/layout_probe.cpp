@@ -1,5 +1,6 @@
 #include "hook/layout.hpp"
 #include "platform/shell_tabs.hpp"
+#include <fstream>
 #include <iostream>
 
 // Developer probe. Copy alongside sinan-layout.dll as sinan-agent.exe in an
@@ -16,15 +17,38 @@ int main(int argc,char** argv) {
             });
             if(target==scan.tabs.end())throw Error(3,"Target has no supported Explorer tab");
             const auto test=argc>3?std::string_view(argv[3]):"cycle";
+            Json request={{"hide_more",test=="hide-more"},{"inspect_items",test=="inventory"||test=="customize"}};
+            if(test=="customize") {
+                if(argc!=5)throw Error(2,"Pass a command bar settings JSON file");
+                std::ifstream settings(argv[4]);
+                if(!settings)throw Error(2,"Cannot read command bar settings");
+                request["settings"]=Json::parse(settings);
+                request["filesystem_tabs"]={reinterpret_cast<uintptr_t>(target->native->browser_window)};
+            }
             const auto report=[&](std::string_view phase,LayoutAction action) {
-                auto result=send_layout_payload(*target->native,action,{},{{"hide_more",test=="hide-more"}});
+                auto result=send_layout_payload(*target->native,action,{},request);
                 result["phase"]=phase;
                 std::cout<<result.dump()<<std::endl;
                 return result;
             };
             try {
-                if(test=="inspect") {
+                if(test=="inspect"||test=="inventory") {
                     report("inspect",LayoutAction::command_bar_inspect);
+                    return 0;
+                }
+                if(test=="customize") {
+                    for(int i=0;i<20;++i) {
+                        const auto baseline=report("baseline",LayoutAction::command_bar_inspect);
+                        if(!baseline.value("pending",false)&&baseline.at("bars").size()>=2)break;
+                        if(i==19)throw Error(1,"Both Explorer command bars are required");
+                        Sleep(250);
+                    }
+                    report("enable",LayoutAction::command_bar_enable);
+                    for(int i=0;i<3;++i) {
+                        Sleep(500);
+                        report("renew",LayoutAction::command_bar_enable);
+                    }
+                    report("disable",LayoutAction::command_bar_disable);
                     return 0;
                 }
                 const auto check=[&](const Json& result,bool enabled) {

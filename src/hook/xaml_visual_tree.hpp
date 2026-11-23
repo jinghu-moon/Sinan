@@ -7,6 +7,27 @@ namespace sinan {
 // Public WinUI ABI from Microsoft.UI.Xaml.winmd.
 struct XamlPoint {float x,y;};
 struct XamlRect {float x,y,width,height;};
+MIDL_INTERFACE("C3C01020-320C-5CF6-9D24-D396BBFA4D8B") IXamlElement : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_DesiredSize(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_AllowDrop(bool*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_AllowDrop(bool) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Opacity(double*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Opacity(double) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Clip(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Clip(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_RenderTransform(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_RenderTransform(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Projection(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Projection(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Transform3D(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Transform3D(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_RenderTransformOrigin(XamlPoint*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_RenderTransformOrigin(XamlPoint) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsHitTestVisible(bool*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsHitTestVisible(bool) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Visibility(int32_t*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Visibility(int32_t) = 0;
+};
 inline constexpr GUID xaml_dependency_object{0xe7beaee7,0x160e,0x50f7,{0x87,0x89,0xd6,0x34,0x63,0xf9,0x79,0xfa}};
 MIDL_INTERFACE("B7CA8EE3-A07A-5F69-8AB8-BE4E3E4CF0C8") IXamlCommandBar : public IInspectable {
     virtual HRESULT STDMETHODCALLTYPE get_PrimaryCommands(IInspectable**) = 0;
@@ -41,6 +62,81 @@ MIDL_INTERFACE("71EA1253-DD9C-5509-ACED-2EB045571D53") IXamlCommandsChanged : pu
 MIDL_INTERFACE("4FC6CE4E-919E-5B90-A071-507B7CC3273C") IXamlObservableCommands : public IInspectable {
     virtual HRESULT STDMETHODCALLTYPE add_VectorChanged(IXamlCommandsChanged*, EventRegistrationToken*) = 0;
     virtual HRESULT STDMETHODCALLTYPE remove_VectorChanged(EventRegistrationToken) = 0;
+};
+MIDL_INTERFACE("8AB0E278-B6AE-569E-8DCD-D293552FE4D5") IXamlAppBarButton : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_Label(HSTRING*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Label(HSTRING) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Icon(IInspectable**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Icon(IInspectable*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_LabelPosition(int32_t*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_LabelPosition(int32_t) = 0;
+};
+MIDL_INTERFACE("DAE23D85-69CA-5BDF-805B-6161A3A215CC") IXamlRoutedEventHandler : public IUnknown {
+    virtual HRESULT STDMETHODCALLTYPE Invoke(IInspectable*, IInspectable*) = 0;
+};
+MIDL_INTERFACE("65714269-2473-5327-A652-0EA6BCE7F403") IXamlButtonBase : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_ClickMode(int32_t*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_ClickMode(int32_t) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsPointerOver(bool*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsPressed(bool*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Command(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Command(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_CommandParameter(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_CommandParameter(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_Click(IXamlRoutedEventHandler*,EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_Click(EventRegistrationToken) = 0;
+};
+struct XamlFontWeight {uint16_t weight;};
+MIDL_INTERFACE("857D6E8A-D45A-5C69-A99C-BF6A5C54FB38") IXamlControl : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_IsFocusEngagementEnabled(bool*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsFocusEngagementEnabled(bool) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsFocusEngaged(bool*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsFocusEngaged(bool) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_RequiresPointer(int32_t*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_RequiresPointer(int32_t) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_FontSize(double*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_FontSize(double) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_FontFamily(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_FontFamily(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_FontWeight(XamlFontWeight*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_FontWeight(XamlFontWeight) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_FontStyle(int32_t*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_FontStyle(int32_t) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_FontStretch(int32_t*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_FontStretch(int32_t) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_CharacterSpacing(int32_t*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_CharacterSpacing(int32_t) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Foreground(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Foreground(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsTextScaleFactorEnabled(bool*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsTextScaleFactorEnabled(bool) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsEnabled(bool*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsEnabled(bool) = 0;
+};
+MIDL_INTERFACE("B1E3E0F3-112F-5966-87DC-7862D4AD50E5") IXamlAutomationProperties : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_AcceleratorKeyProperty(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetAcceleratorKey(void*,HSTRING*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetAcceleratorKey(void*,HSTRING) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_AccessKeyProperty(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetAccessKey(void*,HSTRING*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE SetAccessKey(void*,HSTRING) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_AutomationIdProperty(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE GetAutomationId(IInspectable*,HSTRING*) = 0;
+};
+MIDL_INTERFACE("C370BC29-805B-5BAD-B615-EC640E579DBB") IXamlBitmapIcon : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_UriSource(IInspectable**) = 0;
+};
+MIDL_INTERFACE("AB6F4473-1F6B-5B24-8259-1D38E90A110A") IXamlIconSourceElement : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_IconSource(IInspectable**) = 0;
+};
+MIDL_INTERFACE("78A7B526-E635-59C6-93A1-D7E3C2FAC6D5") IXamlImageIcon : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_Source(IInspectable**) = 0;
+};
+MIDL_INTERFACE("67F75BE0-C84D-57FF-9F68-039C81EA7896") IXamlImageIconSource : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_ImageSource(IInspectable**) = 0;
+};
+MIDL_INTERFACE("D5B61D3C-B68D-53A2-B07B-BA6ADFDD5887") IXamlSvgImageSource : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_UriSource(IInspectable**) = 0;
 };
 MIDL_INTERFACE("5AECE43C-7651-5BB5-855C-2198496E455E") ITreeHelper : public IInspectable {
     virtual HRESULT STDMETHODCALLTYPE FindPoint(XamlPoint,void*,void**) = 0;

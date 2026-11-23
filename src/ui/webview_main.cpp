@@ -192,7 +192,7 @@ private:
             } else if (action == "folder-sizes.set" || action == "selection-summary.set") {
                 request["settings"] = incoming.at("settings");
                 refresh_general = true;
-            } else if (action == "appearance.settings.save") {
+            } else if (action == "appearance.settings.save" || action == "command-bar.save") {
                 request["settings"] = incoming.at("settings");
                 request["expected"] = incoming.at("expected");
             } else if (action == "agent.start" || action == "start" || action == "stop") {
@@ -234,7 +234,7 @@ private:
                 if (action == "rule.move") request["position"] = incoming.at("position");
             } else if (action != "general.get" && action != "appearance.settings.get" &&
                        action != "rules.get" && action != "entries.settings.get" &&
-                       action != "shortcuts.settings.get" && action != "tabs.settings.get") {
+                       action != "shortcuts.settings.get" && action != "tabs.settings.get" && action != "command-bar.get") {
                 post_reply({{"id", id}, {"code", 2}, {"result", {{"message", "设置页不支持此操作。"}}}});
                 return S_OK;
             }

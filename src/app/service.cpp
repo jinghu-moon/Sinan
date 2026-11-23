@@ -101,6 +101,31 @@ static Json application_action_impl(const fs::path& root,const Json& request) {
     }
     if(action=="appearance.get")return response(appearance_json(ConfigStore(root).load().tabs));
     if(action=="appearance.settings.get")return response(tab_appearance_settings(ConfigStore(root).load()));
+    if(action=="command-bar.get") {
+        const auto settings=ConfigStore(root).load().command_bar;
+        const auto state=observer_status(root).value("command_bar",Json{{"state",settings.enabled?"waiting":"disabled"}});
+        return response({{"command_bar",command_bar_json(settings)},{"command_bar_application",state}});
+    }
+    if(action=="command-bar.save") {
+        const auto settings=command_bar_from_json(request.at("settings"));
+        const auto expected=command_bar_from_json(request.at("expected"));
+        ConfigStore(root).update([&](Config& config) {
+            if(config.command_bar!=expected&&config.command_bar!=settings)
+                throw Error(2,"命令栏配置已变更，请刷新后重试。");
+            config.command_bar=settings;
+        });
+        Json state={{"state",settings.enabled?"waiting":"disabled"}};
+        Json result={{"saved",true},{"command_bar",command_bar_json(settings)}};
+        try {
+            if(settings.enabled)start_observer_agent(root);
+            if(auto peer=agent_request(root,{{"command","reload"},{"config_only",true}})) {
+                if(peer->at("code")!=0)throw Error(5,peer->at("result").value("message","Agent could not load command bar settings"));
+                state=peer->at("result").value("command_bar",state);
+            }
+        }catch(const std::exception& error) {state={{"state","unavailable"},{"errors",Json::array({error.what()})}};}
+        result["command_bar_application"]=state;
+        return response(result,state.value("state",std::string{})=="unavailable"?5:0);
+    }
     if(action=="features.get"){
         auto features=ConfigStore(root).load().features;auto group=request.at("group").get<std::string>();
         if(!features.contains(group))throw Error(2,"Unknown feature group");return response(features.at(group));

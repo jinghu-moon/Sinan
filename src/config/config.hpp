@@ -18,6 +18,19 @@ struct SelectionSummarySettings {
     bool operator==(const SelectionSummarySettings&) const = default;
 };
 
+inline constexpr std::string_view command_bar_buttons[]{"new", "cut", "copy", "paste", "rename", "share", "delete",
+    "sort", "view", "more", "details", "extract_all", "set_background", "rotate_left", "rotate_right"};
+inline constexpr std::string_view command_bar_labels[]{"new", "sort", "view", "details"};
+inline constexpr std::string_view command_bar_separators[]{"after_new", "after_delete", "before_more"};
+struct CommandBarSettings {
+    bool enabled = false;
+    bool terminal = true;
+    std::vector<std::string> hidden;
+    std::vector<std::string> icon_only;
+    std::vector<std::string> hidden_separators;
+    bool operator==(const CommandBarSettings&) const = default;
+};
+
 struct Config {
     int64_t revision = 1;
     bool enabled = false;
@@ -35,6 +48,7 @@ struct Config {
     bool external_tabs = false;
     FolderSizeSettings folder_sizes;
     SelectionSummarySettings selection_summary;
+    CommandBarSettings command_bar;
     Json features = default_features();
     DisplayOptions display_options() const;
 };
@@ -47,6 +61,8 @@ Json folder_sizes_json(const FolderSizeSettings& settings, bool text_bytes = fal
 FolderSizeSettings folder_sizes_from_json(const Json& settings);
 Json selection_summary_json(const SelectionSummarySettings& settings);
 SelectionSummarySettings selection_summary_from_json(const Json& settings);
+Json command_bar_json(const CommandBarSettings& settings);
+CommandBarSettings command_bar_from_json(const Json& value);
 std::string config_toml(const Config& config);
 Json rule_json(const DirectoryRule& rule);
 DirectoryRule rule_from_json(const Json& value);
