@@ -16,5 +16,9 @@ bool transfer_paths(const std::vector<std::wstring>& paths,const std::wstring& d
 Json create_named_folder(const std::wstring& parent, const std::wstring& name);
 Json run_shell_view_action(IShellView& view, HWND frame, std::string_view action, const Json& parameters);
 Json run_powershell_action(const fs::path& script, IShellView* view);
+std::vector<std::wstring> command_arguments(std::string_view source,const std::wstring& directory,
+    const std::vector<std::pair<std::wstring,bool>>& selections);
+Json run_command_application(const Json& application, IShellView& view, HWND frame);
+std::wstring command_application_icon(const fs::path& cache, const std::wstring& target);
 void reveal_file(const std::wstring& file, IShellView* existing_view=nullptr);
 }

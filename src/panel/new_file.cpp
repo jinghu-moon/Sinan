@@ -1,6 +1,7 @@
 #include "panel/new_file.hpp"
 #include "config/tab_features.hpp"
 #include "platform/shell_actions.hpp"
+#include "platform/command_templates.hpp"
 #include "platform/shell_tabs.hpp"
 #include "policy/entries.hpp"
 #include <commctrl.h>
@@ -59,19 +60,15 @@ bool select_created_file(const fs::path& path, NewFileSource source) {
 CreateResult create_file(const fs::path& directory, const std::wstring& name, bool open, NewFileSource source) {
     CreateResult result{};
     result.open_requested=open;
-    const auto path=(directory/name).make_preferred();
-    {
-        Handle file(CreateFileW(path.c_str(),GENERIC_WRITE,FILE_SHARE_READ,nullptr,CREATE_NEW,FILE_ATTRIBUTE_NORMAL,nullptr));
-        if(!file) {
-            result.error=GetLastError();
-            return result;
-        }
-    }
-
     const auto com=CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED);
-    if(FAILED(com))return result;
+    if(FAILED(com)){result.error=ERROR_GEN_FAILURE;return result;}
     struct ComScope { ~ComScope(){CoUninitialize();} } scope;
-    SHChangeNotify(SHCNE_CREATE,SHCNF_PATHW,path.c_str(),nullptr);
+    fs::path path;
+    try {path=shell_create_item(source.frame,directory,name,false);}
+    catch(const Error& error){
+        result.error=error.code==ERROR_ALREADY_EXISTS?ERROR_ALREADY_EXISTS:ERROR_GEN_FAILURE;
+        return result;
+    }
     try {
         result.selected=select_created_file(path,source);
     } catch(const std::exception&) {}

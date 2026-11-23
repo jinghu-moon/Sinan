@@ -4,6 +4,7 @@
 #include <charconv>
 #include <limits>
 #include <sstream>
+#include <set>
 
 namespace sinan {
 std::optional<int> parse_depth(std::string_view text) {
@@ -62,11 +63,15 @@ Json command_bar_json(const CommandBarSettings& settings) {
     auto result=Json{{"enabled",settings.enabled},{"terminal",settings.terminal},{"hidden",settings.hidden},
         {"icon_only",settings.icon_only},{"hidden_separators",settings.hidden_separators}};
     if(!settings.conditions.empty())result["conditions"]=settings.conditions;
+    if(!settings.templates.empty())result["templates"]=settings.templates;
+    if(!settings.actions.empty())result["actions"]=settings.actions;
+    if(!settings.applications.empty())result["applications"]=settings.applications;
+    if(settings.new_file_button)result["new_file_button"]=true;
     return result;
 }
 
 CommandBarSettings command_bar_from_json(const Json& value) {
-    keys(value,{"enabled","terminal","hidden","icon_only","hidden_separators","conditions"});
+    keys(value,{"enabled","terminal","hidden","icon_only","hidden_separators","conditions","templates","new_file_button","actions","applications"});
     CommandBarSettings settings;
     const auto read_list=[&](const char* key,const auto& allowed) {
         const auto items=value.value(key,std::vector<std::string>{});
@@ -82,6 +87,7 @@ CommandBarSettings command_bar_from_json(const Json& value) {
     };
     settings.enabled=value.value("enabled",false);
     settings.terminal=value.value("terminal",true);
+    settings.new_file_button=value.value("new_file_button",false);
     settings.hidden=read_list("hidden",command_bar_buttons);
     settings.icon_only=read_list("icon_only",command_bar_labels);
     settings.hidden_separators=read_list("hidden_separators",command_bar_separators);
@@ -108,6 +114,54 @@ CommandBarSettings command_bar_from_json(const Json& value) {
         settings.conditions[action]={{"count",count},{"kind",kind},{"extensions",std::move(extensions)},
             {"hide",rule.value("hide",false)}};
     }
+    settings.templates=value.value("templates",Json::object());
+    keys(settings.templates,{"directory","position","new_plus","hide_extension","hide_digits","variables"});
+    const auto directory=settings.templates.value("directory",std::string{});
+    if(!directory.empty())directory_key(wide(directory));
+    const auto position=settings.templates.value("position",std::string("menu"));
+    if(position!="menu"&&position!="beside"&&position!="replace"&&position!="off")
+        throw Error(2,"Invalid template button position");
+    for(const auto name:{"new_plus","hide_extension","hide_digits","variables"})
+        if(settings.templates.contains(name))settings.templates.at(name).get<bool>();
+    settings.actions=value.value("actions",Json::array());
+    if(!settings.actions.is_array()||settings.actions.size()>48)throw Error(2,"Expected up to 48 command bar entries");
+    std::set<std::string> identifiers;
+    for(auto& item:settings.actions) {
+        keys(item,{"id","action","label","group","placement","dynamic","icon_light","icon_dark"});
+        for(const auto field:{"id","action"}) {
+            const auto key=item.at(field).get<std::string>();
+            if(key.empty()||key.size()>120||key.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-_.")!=key.npos)
+                throw Error(2,"Invalid command bar action identifier");
+        }
+        if(!identifiers.insert(item.at("id").get<std::string>()).second)throw Error(2,"Duplicate command bar entry ID");
+        const auto placement=item.value("placement",std::string("menu"));
+        if(placement!="menu"&&placement!="fixed")throw Error(2,"Invalid command bar action placement");
+        for(const auto name:{"label","group","icon_light","icon_dark"})
+            if(item.value(name,std::string{}).size()>320)throw Error(2,"Command bar action field is too long");
+        item.value("dynamic",false);
+    }
+    settings.applications=value.value("applications",Json::object());
+    if(!settings.applications.is_object()||settings.applications.size()>48)throw Error(2,"Invalid command bar applications");
+    for(const auto& [id,application]:settings.applications.items()) {
+        if(id.empty()||id.size()>64||id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-_")!=id.npos)
+            throw Error(2,"Invalid command bar application ID");
+        keys(application,{"name","target","source","pass_arguments"});
+        const auto name=application.at("name").get<std::string>();
+        const auto target=application.at("target").get<std::string>();
+        if(name.empty()||name.size()>160||target.size()>1024||target.find_first_of("\t\r\n")!=target.npos)
+            throw Error(2,"Invalid command bar application details");
+        constexpr std::string_view apps_folder="shell:AppsFolder\\";
+        if(target.starts_with(apps_folder)) {
+            const auto app_id=std::string_view(target).substr(apps_folder.size());
+            if(app_id.empty()||app_id.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-!")!=app_id.npos)
+                throw Error(2,"Invalid AppsFolder application ID");
+        } else if(!target.empty()&&target.find_first_of("\\/:")!=target.npos)directory_key(wide(target));
+        const auto source=application.value("source",std::string("directory"));
+        if(source!="directory"&&source!="smart_folder"&&source!="first"&&source!="all"&&source!="files"&&source!="folders")
+            throw Error(2,"Invalid command bar argument source");
+        application.value("pass_arguments",false);
+    }
+    if(command_bar_json(settings).dump().size()>40000)throw Error(2,"Command bar settings exceed 40000 bytes");
     return settings;
 }
 

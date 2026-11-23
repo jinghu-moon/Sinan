@@ -133,11 +133,41 @@ export type CommandBarSettings = {
   hidden: string[]
   icon_only: string[]
   hidden_separators: string[]
+  new_file_button?: boolean
+  templates?: CommandTemplates
+  actions?: CommandBarEntry[]
+  applications?: Record<string, CommandApplication>
+  conditions?: Record<string, CommandSelectionRule>
 }
+export type CommandTemplates = {
+  directory?: string
+  position?: 'menu' | 'beside' | 'replace' | 'off'
+  new_plus?: boolean
+  hide_extension?: boolean
+  hide_digits?: boolean
+  variables?: boolean
+}
+export type CommandBarEntry = {
+  id: string
+  action: string
+  label?: string
+  group?: string
+  placement: 'menu' | 'fixed'
+  dynamic?: boolean
+  icon_light?: string
+  icon_dark?: string
+}
+export type CommandApplication = { name: string; target: string; source: string; pass_arguments: boolean }
+export type CommandSelectionRule = { count: string; kind: string; extensions: string[]; hide: boolean }
 
 export type SettingsRequest =
   | { action: 'command-bar.get' }
+  | { action: 'command-bar.draft'; dirty: boolean }
+  | { action: 'settings.close' }
+  | { action: 'command-bar.pick-path'; kind: 'directory' | 'application' | 'icon' }
   | { action: 'command-bar.save'; settings: CommandBarSettings; expected: CommandBarSettings }
+  | { action: 'command-bar.templates.preview'; templates: CommandTemplates }
+  | { action: 'command-bar.arguments.preview'; source: string; directory: string; selection: { path: string; folder: boolean }[] }
   | { action: 'folder-sizes.set'; settings: FolderSizeSettings }
   | { action: 'selection-summary.set'; settings: SelectionSummarySettings }
   | {
@@ -234,6 +264,10 @@ type Reply = {
     apply_error?: string
     command_bar?: CommandBarSettings
     command_bar_application?: { state: string; errors?: string[] }
+    command_bar_catalog?: { id: string; label: string }[]
+    templates?: { label: string; filename: string }[]
+    arguments?: string[]
+    path?: string | null
   }
   state?: GeneralState
   refresh_error?: string
@@ -241,12 +275,29 @@ type Reply = {
 
 type WebView = {
   postMessage(request: SettingsRequest & { id: number }): void
-  addEventListener(type: 'message', listener: (event: MessageEvent<Reply>) => void): void
-  removeEventListener(type: 'message', listener: (event: MessageEvent<Reply>) => void): void
+  addEventListener(type: 'message', listener: (event: MessageEvent<Reply & { event?: string }>) => void): void
+  removeEventListener(type: 'message', listener: (event: MessageEvent<Reply & { event?: string }>) => void): void
 }
 
 const webview = () => (window as Window & { chrome?: { webview?: WebView } }).chrome?.webview
 export const hasSettingsHost = () => Boolean(webview())
+
+export function setCommandBarDraft(dirty: boolean) {
+  webview()?.postMessage({ action: 'command-bar.draft', id: 0, dirty })
+}
+
+export function onSettingsClose(handler: () => void) {
+  const host = webview()
+  const onMessage = (event: MessageEvent<Reply & { event?: string }>) => {
+    if (event.data?.event === 'settings.close') handler()
+  }
+  host?.addEventListener('message', onMessage)
+  return () => host?.removeEventListener('message', onMessage)
+}
+
+export function closeSettings() {
+  webview()?.postMessage({ action: 'settings.close', id: 0 })
+}
 let nextId = 0
 let pending = Promise.resolve()
 

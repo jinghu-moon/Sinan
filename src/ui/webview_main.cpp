@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <memory>
 #include <shellapi.h>
+#include <shobjidl.h>
 #include <thread>
 
 namespace sinan {
@@ -30,10 +31,33 @@ Json run_settings_request(const fs::path& root, const Json& request) {
     }
 }
 
+std::optional<std::wstring> pick_command_path(HWND owner,std::string_view kind) {
+    ComPtr<IFileOpenDialog> dialog;
+    if(FAILED(CoCreateInstance(CLSID_FileOpenDialog,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&dialog))))
+        throw Error(5,"无法打开文件选择器");
+    FILEOPENDIALOGOPTIONS options{};
+    if(FAILED(dialog->GetOptions(&options))||
+        FAILED(dialog->SetOptions(options|FOS_FORCEFILESYSTEM|(kind=="directory"?FOS_PICKFOLDERS:FOS_FILEMUSTEXIST))))
+        throw Error(5,"无法设置文件选择器");
+    const COMDLG_FILTERSPEC applications[]={{L"应用程序",L"*.exe;*.lnk"},{L"所有文件",L"*.*"}};
+    const COMDLG_FILTERSPEC images[]={{L"图片",L"*.png;*.ico;*.svg;*.bmp;*.jpg;*.jpeg"},{L"所有文件",L"*.*"}};
+    if(kind=="application")dialog->SetFileTypes(static_cast<UINT>(std::size(applications)),applications);
+    if(kind=="icon")dialog->SetFileTypes(static_cast<UINT>(std::size(images)),images);
+    const auto result=dialog->Show(owner);
+    if(result==HRESULT_FROM_WIN32(ERROR_CANCELLED))return std::nullopt;
+    if(FAILED(result))throw Error(5,"文件选择器未能完成操作");
+    ComPtr<IShellItem> item;
+    PWSTR raw=nullptr;
+    if(FAILED(dialog->GetResult(&item))||FAILED(item->GetDisplayName(SIGDN_FILESYSPATH,&raw))||!raw)
+        throw Error(5,"无法读取所选路径");
+    const std::unique_ptr<wchar_t,decltype(&CoTaskMemFree)> path(raw,CoTaskMemFree);
+    return std::wstring(path.get());
+}
+
 class SettingsWindow : public std::enable_shared_from_this<SettingsWindow> {
 public:
-    SettingsWindow(fs::path web_root, fs::path data_root)
-        : web_root_(std::move(web_root)), data_root_(std::move(data_root)) {}
+    SettingsWindow(fs::path web_root, fs::path data_root, bool command_bar)
+        : web_root_(std::move(web_root)), data_root_(std::move(data_root)), command_bar_(command_bar) {}
 
     int run(HINSTANCE instance, int show) {
         WNDCLASSEXW cls{sizeof(cls)};
@@ -159,7 +183,7 @@ private:
 
         resize();
         if (auto result = controller_->put_IsVisible(TRUE); FAILED(result)) return result;
-        return view->Navigate(L"https://sinan.example/index.html");
+        return view->Navigate(command_bar_?L"https://sinan.example/index.html#/appearance?command-bar=1":L"https://sinan.example/index.html");
     }
 
     HRESULT receive_request(ICoreWebView2WebMessageReceivedEventArgs* args) {
@@ -180,6 +204,22 @@ private:
             const auto& id = incoming.at("id");
             if (!id.is_number_unsigned()) return S_OK;
             const auto action = incoming.at("action").get<std::string>();
+            if(action=="command-bar.draft") {
+                command_bar_dirty_=incoming.at("dirty").get<bool>();
+                return S_OK;
+            }
+            if(action=="settings.close") {
+                command_bar_dirty_=false;
+                PostMessageW(window_,WM_CLOSE,0,0);
+                return S_OK;
+            }
+            if(action=="command-bar.pick-path") {
+                const auto kind=incoming.at("kind").get<std::string>();
+                if(kind!="directory"&&kind!="application"&&kind!="icon")throw Error(2,"无效的路径类型");
+                const auto path=pick_command_path(window_,kind);
+                post_reply({{"id",id},{"code",0},{"result",{{"path",path?Json(utf8(*path)):Json(nullptr)}}}});
+                return S_OK;
+            }
             Json request{{"action", action}};
             bool refresh_general = false;
             if (action == "startup.set" || action == "tray.set" || action == "double-click-parent.set" ||
@@ -195,6 +235,10 @@ private:
             } else if (action == "appearance.settings.save" || action == "command-bar.save") {
                 request["settings"] = incoming.at("settings");
                 request["expected"] = incoming.at("expected");
+            } else if (action == "command-bar.templates.preview") {
+                request["templates"] = incoming.at("templates");
+            } else if (action == "command-bar.arguments.preview") {
+                for(const auto* key:{"source","directory","selection"})request[key]=incoming.at(key);
             } else if (action == "agent.start" || action == "start" || action == "stop") {
                 refresh_general = true;
             } else if (action == "test") {
@@ -300,12 +344,16 @@ private:
                 self->close_pending_ = true;
                 return 0;
             }
+            if(self->command_bar_dirty_) {
+                self->post_reply({{"event","settings.close"}});
+                return 0;
+            }
             break;
         case request_finished:
             if (self->worker_.joinable()) {
                 self->worker_.join();
-                if (self->close_pending_) DestroyWindow(window);
-                else self->post_reply(self->reply_);
+                self->post_reply(self->reply_);
+                if(std::exchange(self->close_pending_,false))PostMessageW(window,WM_CLOSE,0,0);
             }
             return 0;
         case initialization_failed: {
@@ -332,6 +380,7 @@ private:
 
     fs::path web_root_;
     fs::path data_root_;
+    bool command_bar_{};
     HWND window_{};
     ComPtr<ICoreWebView2Controller> controller_;
     const wchar_t* failed_operation_{};
@@ -339,15 +388,23 @@ private:
     Json reply_;
     std::thread worker_;
     bool close_pending_{};
+    bool command_bar_dirty_{};
 };
 
-fs::path settings_data_root() {
+std::pair<fs::path,bool> settings_arguments() {
     int count = 0;
     std::unique_ptr<LPWSTR, decltype(&LocalFree)> args(CommandLineToArgvW(GetCommandLineW(), &count), LocalFree);
-    if (args && count == 1) return data_directory();
-    if (args && count == 3 && std::wstring_view(args.get()[1]) == L"--data-dir" && *args.get()[2])
-        return fs::absolute(args.get()[2]).lexically_normal();
-    throw Error(2, "用法：sinan-gui.exe [--data-dir <目录>]");
+    if (!args)throw Error(2,"无法读取设置窗口参数");
+    bool command_bar=false;
+    fs::path root;
+    for(int index=1;index<count;++index) {
+        const std::wstring_view argument(args.get()[index]);
+        if(argument==L"--command-bar"&&!command_bar)command_bar=true;
+        else if(argument==L"--data-dir"&&root.empty()&&index+1<count&&*args.get()[index+1])
+            root=fs::absolute(args.get()[++index]).lexically_normal();
+        else throw Error(2,"用法：sinan-gui.exe [--command-bar] [--data-dir <目录>]");
+    }
+    return {root.empty()?data_directory():root,command_bar};
 }
 }
 }
@@ -365,7 +422,8 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
         auto web_root = executable_path().parent_path() / L"sinan-web";
         if (!fs::is_regular_file(web_root / L"index.html"))
             throw Error(1, "未找到设置页面文件 sinan-web\\index.html。请重新构建 sinan_gui。");
-        auto window = std::make_shared<SettingsWindow>(std::move(web_root), settings_data_root());
+        auto [root,command_bar]=settings_arguments();
+        auto window = std::make_shared<SettingsWindow>(std::move(web_root),std::move(root),command_bar);
         result = window->run(instance, show);
     } catch (const std::exception& error) {
         MessageBoxW(nullptr, wide(error.what()).c_str(), window_title, MB_OK | MB_ICONERROR);

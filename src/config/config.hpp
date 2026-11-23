@@ -29,6 +29,10 @@ struct CommandBarSettings {
     std::vector<std::string> icon_only;
     std::vector<std::string> hidden_separators;
     Json conditions=Json::object();
+    Json templates=Json::object();
+    Json actions=Json::array();
+    Json applications=Json::object();
+    bool new_file_button=false;
     bool operator==(const CommandBarSettings&) const = default;
 };
 

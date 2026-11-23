@@ -54,13 +54,13 @@ target_include_directories(sinan_domain PUBLIC src)
 target_link_libraries(sinan_domain PUBLIC user32)
 add_library(sinan_windows STATIC
   src/platform/windows.cpp src/platform/user_process.cpp src/config/config.cpp src/config/tab_features.cpp
-  src/installer/environment.cpp src/installer/startup.cpp src/platform/explorer.cpp src/platform/shell_tabs.cpp src/platform/shell_collection.cpp src/platform/shell_actions.cpp src/platform/everything.cpp src/platform/folder_size_query.cpp src/platform/archive.cpp
+  src/installer/environment.cpp src/installer/startup.cpp src/platform/explorer.cpp src/platform/shell_tabs.cpp src/platform/shell_collection.cpp src/platform/shell_actions.cpp src/platform/command_templates.cpp src/platform/everything.cpp src/platform/folder_size_query.cpp src/platform/archive.cpp
   src/ipc/pipe.cpp src/hook/native.cpp src/hook/controller.cpp src/hook/layout_controller.cpp
   src/hook/features_controller.cpp src/hook/style_controller.cpp src/platform/close_dialog.cpp
   src/compat/image.cpp src/compat/profile.cpp src/compat/feature_contracts.cpp src/compat/xaml.cpp src/compat/prepare.cpp)
 target_include_directories(sinan_windows PUBLIC src)
 target_compile_definitions(sinan_windows PUBLIC UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX SINAN_VERSION="${PROJECT_VERSION}")
-target_link_libraries(sinan_windows PUBLIC sinan_domain sinan_toml sinan_decoder nlohmann_json::nlohmann_json advapi32 shell32 user32 ole32 oleaut32 uuid version bcrypt userenv gdi32 comctl32)
+target_link_libraries(sinan_windows PUBLIC sinan_domain sinan_toml sinan_decoder nlohmann_json::nlohmann_json advapi32 shell32 shlwapi user32 ole32 oleaut32 uuid version bcrypt userenv gdi32 comctl32 windowscodecs)
 if(SINAN_BUILD_GUI)
   find_program(SINAN_NPM_EXECUTABLE NAMES npm.cmd REQUIRED)
   FetchContent_Declare(webview2

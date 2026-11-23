@@ -14,8 +14,10 @@
 #include "policy/entries.hpp"
 #include "hook/controller.hpp"
 #include "platform/shell_actions.hpp"
+#include "platform/command_templates.hpp"
 #include "platform/user_process.hpp"
 #include <algorithm>
+#include <future>
 #include <limits>
 #include <set>
 
@@ -50,6 +52,7 @@ int run_observer_agent(const fs::path& root,bool from_login) {
     Json command_bar_actions=Json::array();
     const auto command_bar_message=RegisterWindowMessageW(command_bar_wake_message);
     const auto agent_thread=GetCurrentThreadId();
+    std::function<Json(HWND)> fixed_buttons;
     TabFeatures features;
     ExplorerShortcuts shortcuts;
     FolderClickListener folder_click;
@@ -147,6 +150,7 @@ int run_observer_agent(const fs::path& root,bool from_login) {
     const auto bin=executable_path().parent_path();
     const auto panel_executable=bin/L"sinan-panel.exe";
     const auto cli_executable=bin/L"sinan.exe";
+    const auto gui_executable=bin/L"sinan-gui.exe";
     auto has_panel=[&] {
         std::error_code error;
         return fs::is_regular_file(panel_executable,error);
@@ -228,7 +232,7 @@ int run_observer_agent(const fs::path& root,bool from_login) {
         size_t applied=0,pending=0;
         Json errors=Json::array();
         Json filesystem_tabs=Json::array();
-        if(enabled&&config.command_bar.terminal)for(const auto& tab:tracker.list()) {
+        if(enabled)for(const auto& tab:tracker.list()) {
             if(tab.at("observed").get<bool>()&&tab.at("path").is_string())
                 filesystem_tabs.push_back(tab.at("browser_window"));
         }
@@ -238,7 +242,8 @@ int run_observer_agent(const fs::path& root,bool from_login) {
             try {
                 auto report=send_layout_payload(tab,enabled?LayoutAction::command_bar_enable:LayoutAction::command_bar_disable,{},
                     {{"settings",command_bar_json(config.command_bar)},{"chinese",chinese_ui()},
-                     {"filesystem_tabs",filesystem_tabs},{"agent_thread",agent_thread}});
+                     {"filesystem_tabs",filesystem_tabs},{"agent_thread",agent_thread},
+                     {"fixed",enabled&&fixed_buttons?fixed_buttons(tab.window):Json::array()}});
                 if(report.value("pending",false)||(enabled&&report.at("bars").empty()))++pending;
                 else {
                     ++applied;
@@ -767,16 +772,46 @@ int run_observer_agent(const fs::path& root,bool from_login) {
         HWND frame{},child{};
         uint64_t generation{};
         uint64_t selection_revision{};
+        bool templates_only{};
         TabLocation location;
         std::string tab_id;
         std::optional<std::string> paths;
         std::optional<std::string> names;
         Json rows=Json::array();
         std::map<std::string,Json,std::less<>> commands;
+        std::map<std::string,Json,std::less<>> rows_by_action;
     };
     std::optional<CommandMenu> open_command_menu;
-    auto read_command_menu=[&](HWND frame,HWND child,uint64_t generation) {
+    struct TemplateCopy {
+        HWND frame,child;
+        std::future<fs::path> result;
+    };
+    std::optional<TemplateCopy> template_copy;
+    const auto apply_action_icons=[&](Json& item,const std::string& action,const Json& entry) {
+        std::wstring target;
+        if(action.starts_with("application.")) {
+            if(auto app=config.command_bar.applications.find(action.substr(12));app!=config.command_bar.applications.end())
+                target=wide(app->at("target").get<std::string>());
+        } else if(action.starts_with("script.")) {
+            wchar_t system[MAX_PATH]{};
+            if(const auto length=GetSystemDirectoryW(system,MAX_PATH);length&&length<MAX_PATH)
+                target=(fs::path(system)/L"WindowsPowerShell/v1.0/powershell.exe").wstring();
+        }
+        if(target.empty()&&!entry.contains("icon_light")&&!entry.contains("icon_dark"))return;
+        std::string fallback;
+        for(const auto* field:{"icon_light","icon_dark"}) {
+            auto icon=entry.value(field,std::string{});
+            std::error_code problem;
+            if(icon.empty()||!fs::is_regular_file(wide(icon),problem)) {
+                if(fallback.empty()&&!target.empty())fallback=utf8(command_application_icon(root/L"command-icons",target));
+                icon=fallback;
+            }
+            item[field]=std::move(icon);
+        }
+    };
+    auto read_command_menu=[&](HWND frame,HWND child,uint64_t generation,bool templates_only=false,bool for_fixed=false) {
         CommandMenu menu{frame,child,generation};
+        menu.templates_only=templates_only;
         auto view=enumerator.view(frame,child,true);
         if(FAILED(shell_view_location(*view.Get(),menu.location)))throw Error(5,"Explorer location is unavailable");
         std::vector<std::wstring> paths,names;
@@ -814,6 +849,7 @@ int run_observer_agent(const fs::path& root,bool from_login) {
             items.push_back({{"action",id},{"label",std::move(label)},{"enabled",enabled}});
             if(parameters.value("hide",false))items.back()["hidden"]=true;
             if(parameters.contains("checked"))items.back()["checked"]=parameters.at("checked");
+            menu.rows_by_action[id]=items.back();
             if(enabled)menu.commands.emplace(std::move(id),std::move(parameters));
         };
         const auto group=[&](std::string label,Json items) {
@@ -860,9 +896,12 @@ int run_observer_agent(const fs::path& root,bool from_login) {
             if(!entry.enabled)continue;
             row(items,"entry."+entry.id,utf8(entry.name),true,{{"entry",entry_json(entry)}});
         }
-        for(const auto& script:config.features.at("scripts").at("entries"))
-            row(items,"script."+script.at("id").get<std::string>(),script.at("name").get<std::string>(),filesystem,
+        for(const auto& script:config.features.at("scripts").at("entries")) {
+            const auto id="script."+script.at("id").get<std::string>();
+            row(items,id,script.at("name").get<std::string>(),filesystem,
                 {{"script",script},{"paths",true}});
+            if(!for_fixed)apply_action_icons(items.back(),id,Json::object());
+        }
         group(title("目录与脚本","Directories and scripts"),std::exchange(items,Json::array()));
 
         const auto processes=search_state.at("processes");
@@ -877,8 +916,102 @@ int run_observer_agent(const fs::path& root,bool from_login) {
         items.push_back({{"label",title("Everything 搜索范围","Everything search scope")},{"enabled",search},{"children",std::move(scope)}});
         row(items,"explorer.toggle_file_extensions",title("显示文件扩展名","Show file extensions"),true,
             {{"checked",file_extensions_visible()}});
-        group(title("搜索与视图","Search and view"),std::move(items));
+        group(title("搜索与视图","Search and view"),std::exchange(items,Json::array()));
+        if(!for_fixed&&config.command_bar.templates.value("position",std::string("menu"))!="off") {
+            const auto options=command_templates(root,config.command_bar.templates);
+            const auto templates=list_command_templates(options);
+            for(size_t index=0;index<templates.size();++index) {
+                const auto& entry=templates[index];
+                row(items,"template."+std::to_string(index),utf8(entry.label),filesystem,
+                    {{"source",utf8(entry.path.wstring())},{"folder",entry.folder},{"variables",options.variables}});
+            }
+            row(items,"template.directory",title("打开模板目录","Open templates directory"),true,
+                {{"directory",utf8(options.directory.wstring())}});
+            if(templates_only) {
+                menu.rows=std::move(items);
+                return menu;
+            }
+            group(title("从模板新建","New from template"),std::exchange(items,Json::array()));
+        }
+        for(const auto& [id,app]:config.command_bar.applications.items()) {
+            Json app_items=Json::array();
+            row(app_items,"application."+id,app.at("name").get<std::string>(),
+                filesystem&&!app.at("target").get_ref<const std::string&>().empty(),{{"application",app},{"paths",true}});
+        }
+        {
+            Json optional=Json::array();
+            const auto count=paths.size();
+            const auto location=filesystem?utf8(fs::path(*menu.location.filesystem_path).filename().wstring()):std::string{};
+            const auto path_label=count?title("复制选中项路径","Copy selected paths"):title("复制当前目录路径","Copy current directory path");
+            row(optional,"explorer.copy_path",path_label,menu.paths&&(count||filesystem),{{"paths",true}});
+            auto terminal=title("在此打开终端","Open terminal here");
+            const auto attributes=count==1?GetFileAttributesW(paths.front().c_str()):INVALID_FILE_ATTRIBUTES;
+            if(attributes!=INVALID_FILE_ATTRIBUTES&&(attributes&FILE_ATTRIBUTE_DIRECTORY)!=0)
+                terminal=title("在此打开终端 · ","Open terminal · ")+utf8(fs::path(paths.front()).filename().wstring());
+            else if(!location.empty())terminal+=" · "+location;
+            row(optional,"explorer.open_terminal_smart",std::move(terminal),filesystem&&menu.paths.has_value(),{{"paths",true}});
+        }
+        std::vector<std::pair<std::string,Json>> custom_groups;
+        for(const auto& entry:config.command_bar.actions) {
+            const auto id=entry.at("id").get<std::string>();
+            const auto action=entry.at("action").get<std::string>();
+            const auto source=menu.rows_by_action.find(action);
+            const auto override_label=entry.value("label",std::string{});
+            auto label=!override_label.empty()?override_label:
+                source!=menu.rows_by_action.end()?source->second.at("label").get<std::string>():action;
+            const auto current=menu.commands.find(action);
+            const bool enabled=current!=menu.commands.end();
+            if(entry.value("placement",std::string("menu"))=="fixed") {
+                menu.rows_by_action["fixed."+id]={{"label",std::move(label)},{"enabled",enabled}};
+                if(enabled) {
+                    auto parameters=current->second;
+                    parameters["target_action"]=action;
+                    menu.commands["fixed."+id]=std::move(parameters);
+                }
+                continue;
+            }
+            auto group_name=entry.value("group",std::string{});
+            if(group_name.empty())group_name=title("自定义动作","Custom actions");
+            auto target=std::find_if(custom_groups.begin(),custom_groups.end(),[&](const auto& other){return other.first==group_name;});
+            if(target==custom_groups.end()){
+                custom_groups.emplace_back(std::move(group_name),Json::array());
+                target=std::prev(custom_groups.end());
+            }
+            if(source!=menu.rows_by_action.end()&&source->second.value("hidden",false))continue;
+            Json parameters=enabled?current->second:Json::object();
+            parameters["target_action"]=action;
+            row(target->second,"custom."+id,std::move(label),enabled,std::move(parameters));
+            if(!for_fixed)apply_action_icons(target->second.back(),action,entry);
+        }
+        for(auto& [label,rows]:custom_groups)group(std::move(label),std::move(rows));
+        row(menu.rows,"settings",title("自定义命令栏","Customize command bar"),fs::is_regular_file(gui_executable));
         return menu;
+    };
+    fixed_buttons=[&](HWND frame) {
+        auto rows=Json::array();
+        if(config.command_bar.actions.empty())return rows;
+        HWND child=nullptr;
+        do {child=FindWindowExW(frame,child,L"ShellTabWindowClass",nullptr);} while(child&&!IsWindowVisible(child));
+        std::optional<CommandMenu> menu;
+        if(child&&frame==GetForegroundWindow())try {
+            menu=read_command_menu(frame,child,0,false,true);
+        }catch(const Error&) {}
+        for(const auto& entry:config.command_bar.actions) {
+            if(entry.value("placement",std::string("menu"))!="fixed")continue;
+            const auto action="fixed."+entry.at("id").get<std::string>();
+            const auto id=entry.at("action").get<std::string>();
+            const bool dynamic=entry.value("dynamic",false);
+            Json row={{"action",action},{"label",entry.value("label",id)},{"enabled",false},
+                {"dynamic",dynamic},
+                {"icon_light",entry.value("icon_light",std::string{})},{"icon_dark",entry.value("icon_dark",std::string{})}};
+            apply_action_icons(row,id,entry);
+            if(menu)if(const auto found=menu->rows_by_action.find(action);found!=menu->rows_by_action.end()) {
+                row["label"]=found->second.at("label");
+                row["enabled"]=found->second.at("enabled");
+            }
+            rows.push_back(std::move(row));
+        }
+        return rows;
     };
     auto command_target=[&](HWND frame)->NativeTab {
         DWORD pid{};
@@ -1119,6 +1252,7 @@ int run_observer_agent(const fs::path& root,bool from_login) {
             : last_scan + scan_interval_ms;
         auto wait_ms = static_cast<DWORD>(deadline > now ? deadline - now : 0);
         if (archives.pending()) wait_ms = std::min<DWORD>(wait_ms, 100);
+        if (template_copy) wait_ms = std::min<DWORD>(wait_ms,100);
         wait_ms = selection_summary.wait_time(wait_ms);
         auto served=server.poll(handler, wait_ms, shortcuts.action_ready());
         if(stopping)break;
@@ -1137,6 +1271,26 @@ int run_observer_agent(const fs::path& root,bool from_login) {
         if(auto action=tray.take())run_tray_action(*action);
         if(stopping)break;
         selection_summary.poll(enumerator);
+        if(template_copy&&template_copy->result.wait_for(std::chrono::seconds(0))==std::future_status::ready) {
+            auto job=std::move(*template_copy);
+            template_copy.reset();
+            try {
+                const auto created=job.result.get();
+                bool rename=false;
+                if(GetForegroundWindow()==job.frame)try {
+                    auto view=enumerator.view(job.frame,job.child,true);
+                    rename=select_created_item(*view.Get(),created,true);
+                }catch(const Error&) {}
+                if(!rename)try {
+                    auto view=enumerator.view(job.frame,job.child,false);
+                    select_created_item(*view.Get(),created,false);
+                }catch(const Error&) {}
+                last_action={{"action","template.create"},{"result",{{"path",utf8(created.wstring())},{"rename_requested",rename}}}};
+            }catch(const std::exception& error) {
+                last_action={{"action","template.create"},{"error",error.what()}};
+                notifications.show(config.features.at("notifications").at("mode"),error.what(),"",true);
+            }
+        }
         if(auto* job=archives.poll()) {
             const bool zh=chinese_ui();
             const bool success=job->result.has_value();
@@ -1275,37 +1429,70 @@ int run_observer_agent(const fs::path& root,bool from_login) {
             auto frame=reinterpret_cast<HWND>(event.at("window").get<uint64_t>());
             auto child=reinterpret_cast<HWND>(event.at("child").get<uint64_t>());
             if(!config.command_bar.enabled||!child||GetForegroundWindow()!=frame||!IsWindowVisible(child))continue;
-            const auto action=event.value("action",std::string("explorer.open_terminal"));
+            auto action=event.value("action",std::string("explorer.open_terminal"));
             if(action=="explorer.open_terminal") {
                 if(config.command_bar.terminal)run_action({{"command",action}},frame,child);
                 continue;
             }
-            const auto generation=event.at("generation").get<uint64_t>();
+            const auto generation=event.value("generation",uint64_t{});
             reload();
             if(!config_error.empty())throw Error(5,config_error);
             if(!config.command_bar.enabled)continue;
-            if(action=="menu") {
+            if(action=="explorer.new_file"&&!generation) {
+                if(config.command_bar.new_file_button)run_action({{"command",action}},frame,child);
+                continue;
+            }
+            if(action=="menu"||action=="templates") {
                 scan();
-                auto menu=read_command_menu(frame,child,generation);
+                auto menu=read_command_menu(frame,child,generation,action=="templates");
                 menu.selection_revision=selection_summary.selection_revision(frame);
                 send_layout_payload(command_target(frame),LayoutAction::command_bar_menu,{},
                     {{"generation",generation},{"child",reinterpret_cast<uintptr_t>(child)},{"rows",menu.rows}});
                 open_command_menu=std::move(menu);
                 continue;
             }
-            if(!open_command_menu||open_command_menu->frame!=frame||open_command_menu->child!=child||
-                open_command_menu->generation!=generation)throw Error(5,"Open the Sinan menu again");
-            auto previous=std::exchange(open_command_menu,std::nullopt);
-            const auto current=read_command_menu(frame,child,generation);
-            const auto command=previous->commands.find(action);
+            const bool fixed=action.starts_with("fixed.");
+            std::optional<CommandMenu> previous;
+            if(!fixed) {
+                if(!open_command_menu||open_command_menu->frame!=frame||open_command_menu->child!=child||
+                    open_command_menu->generation!=generation)throw Error(5,"Open the Sinan menu again");
+                previous=std::exchange(open_command_menu,std::nullopt);
+            }
+            const auto current=read_command_menu(frame,child,generation,previous&&previous->templates_only,fixed);
             const auto current_command=current.commands.find(action);
-            if(command==previous->commands.end()||current_command==current.commands.end()||command->second!=current_command->second||
+            const auto command=previous?previous->commands.find(action):current_command;
+            if(current_command==current.commands.end()||(previous&&(command==previous->commands.end()||command->second!=current_command->second||
                 current.tab_id!=previous->tab_id||current.location.filesystem_path!=previous->location.filesystem_path||
                 (command->second.value("paths",false)&&current.paths!=previous->paths)||
-                (command->second.value("names",false)&&current.names!=previous->names))
+                (command->second.value("names",false)&&current.names!=previous->names))))
                 throw Error(5,chinese_ui()?"标签、选区或命令已变更，请重新打开司南菜单。":
                     "The tab, selection or command changed. Open the Sinan menu again.");
-            if(action.starts_with("tabs.")) {
+            action=command->second.value("target_action",action);
+            if(action=="settings") {
+                UserProcessLauncher launcher;
+                launcher.launch(gui_executable,quote_argument(gui_executable.wstring())+
+                    L" --command-bar --data-dir "+quote_argument(root.wstring()));
+            } else if(action=="template.directory") {
+                const auto directory=wide(command->second.at("directory").get<std::string>());
+                fs::create_directories(directory);
+                open_path(directory,frame);
+            } else if(action.starts_with("template.")) {
+                if(template_copy)throw Error(5,"A template copy is in progress");
+                if(!current.location.filesystem_path)throw Error(3,"The source tab has no filesystem directory");
+                const auto folder=command->second.at("folder").get<bool>();
+                const fs::path source=wide(command->second.at("source").get<std::string>());
+                const fs::path directory=*current.location.filesystem_path;
+                const auto name=template_name(source.filename().wstring(),directory,command->second.at("variables").get<bool>());
+                template_copy=TemplateCopy{frame,child,std::async(std::launch::async,[frame,directory,name,folder,source] {
+                    if(FAILED(CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED)))throw Error(5,"Could not initialize file copy");
+                    struct ComScope {~ComScope(){CoUninitialize();}} scope;
+                    return shell_create_item(frame,directory,name,folder,source,true);
+                })};
+            } else if(action.starts_with("application.")) {
+                auto view=enumerator.view(frame,child,true);
+                auto result=run_command_application(command->second.at("application"),*view.Get(),frame);
+                last_action={{"action",action},{"result",std::move(result)}};
+            } else if(action.starts_with("tabs.")) {
                 auto result=handler({{"command",action},{"runtime_id",runtime_id},{"tab_id",current.tab_id},
                     {"enabled",!command->second.at("checked").get<bool>()}});
                 last_action={{"action",action},{"result",std::move(result)}};
@@ -1335,7 +1522,7 @@ int run_observer_agent(const fs::path& root,bool from_login) {
             if(!config.command_bar.enabled||GetForegroundWindow()!=previous.frame||!IsWindowVisible(previous.child)) {
                 open_command_menu.reset();
             } else if(revision!=previous.selection_revision) {
-                auto current=read_command_menu(previous.frame,previous.child,previous.generation);
+                auto current=read_command_menu(previous.frame,previous.child,previous.generation,previous.templates_only);
                 current.selection_revision=revision;
                 const bool changed_tab=current.tab_id!=previous.tab_id||
                     current.location.filesystem_path!=previous.location.filesystem_path;

@@ -1,4 +1,5 @@
 #include "platform/shell_actions.hpp"
+#include "platform/command_templates.hpp"
 #include "policy/entries.hpp"
 #include "platform/everything.hpp"
 #include "platform/user_process.hpp"
@@ -9,6 +10,7 @@
 #include <cstring>
 #include <memory>
 #include <tlhelp32.h>
+#include <wincodec.h>
 
 namespace sinan {
 using Microsoft::WRL::ComPtr;
@@ -272,6 +274,102 @@ Json run_powershell_action(const fs::path& script, IShellView* view) {
     return {{"started",true},{"pid",GetProcessId(process.process.get())},
         {"directory",context.at("directory")},{"selected_count",selected_count}};
 }
+std::vector<std::wstring> command_arguments(std::string_view source,const std::wstring& directory,
+    const std::vector<std::pair<std::wstring,bool>>& selections) {
+    if(source=="directory")return {directory};
+    if(source=="smart_folder")return {selections.size()==1&&selections.front().second?selections.front().first:directory};
+    if(source=="first")return selections.empty()?std::vector<std::wstring>{}:std::vector<std::wstring>{selections.front().first};
+    std::vector<std::wstring> paths;
+    for(const auto& [path,folder]:selections)
+        if(source=="all"||(folder&&source=="folders")||(!folder&&source=="files"))paths.push_back(path);
+    return paths;
+}
+Json run_command_application(const Json& application, IShellView& view, HWND frame) {
+    const auto directory=view_path(view);
+    const auto target=wide(application.at("target").get<std::string>());
+    if(target.empty())throw Error(3,"The command application has no local association");
+    std::vector<std::wstring> paths;
+    if(application.value("pass_arguments",false)) {
+        std::vector<std::pair<std::wstring,bool>> entries;
+        for(auto path:selected_paths(view)) {
+            const auto attributes=GetFileAttributesW(path.c_str());
+            if(attributes==INVALID_FILE_ATTRIBUTES)throw Error(3,"A selected item is unavailable");
+            entries.emplace_back(std::move(path),(attributes&FILE_ATTRIBUTE_DIRECTORY)!=0);
+        }
+        paths=command_arguments(application.value("source",std::string("directory")),directory,entries);
+        if(paths.empty())throw Error(2,"The application requires a selection matching its argument source");
+    }
+    std::wstring arguments;
+    for(const auto& path:paths) {
+        if(!arguments.empty())arguments+=L" ";
+        arguments+=quote_argument(path);
+    }
+    SHELLEXECUTEINFOW start{sizeof(start)};
+    start.fMask=SEE_MASK_NOASYNC|SEE_MASK_FLAG_NO_UI;
+    start.hwnd=frame;start.lpFile=target.c_str();start.lpDirectory=directory.c_str();
+    start.lpParameters=arguments.c_str();start.nShow=SW_SHOWNORMAL;
+    PIDLIST_ABSOLUTE raw=nullptr;
+    if(target.starts_with(L"shell:AppsFolder\\")&&SUCCEEDED(SHParseDisplayName(target.c_str(),nullptr,&raw,0,nullptr))) {
+        start.fMask|=SEE_MASK_IDLIST;
+        start.lpIDList=raw;
+        start.lpFile=nullptr;
+    }
+    const std::unique_ptr<ITEMIDLIST,decltype(&CoTaskMemFree)> item(raw,CoTaskMemFree);
+    if(!ShellExecuteExW(&start))throw Error(5,system_error("Launch command application"));
+    return {{"launch_requested",true},{"directory",utf8(directory)},{"arguments",utf8(arguments)}};
+}
+std::wstring command_application_icon(const fs::path& cache,const std::wstring& target) {
+    if(target.empty())return {};
+    auto path=fs::path(target);
+    const bool packaged=target.starts_with(L"shell:AppsFolder\\");
+    if(!packaged&&path.is_relative()) {
+        const auto alias=fs::path(env(L"LOCALAPPDATA"))/L"Microsoft"/L"WindowsApps"/path;
+        if(GetFileAttributesW(alias.c_str())!=INVALID_FILE_ATTRIBUTES)path=alias;
+        else {
+            wchar_t resolved[32768]{};
+            const auto length=SearchPathW(nullptr,target.c_str(),L".exe",static_cast<DWORD>(std::size(resolved)),resolved,nullptr);
+            if(!length||length>=std::size(resolved))return {};
+            path=resolved;
+        }
+    }
+    std::error_code error;
+    const auto changed=packaged?fs::file_time_type{}:fs::last_write_time(path,error);
+    if(error&&GetFileAttributesW(path.c_str())==INVALID_FILE_ATTRIBUTES)return {};
+    error.clear();
+    const auto key=compat::sha256(utf8(path.wstring())+"\n"+std::to_string(changed.time_since_epoch().count()));
+    const auto output=cache/(wide(key)+L".png");
+    if(fs::is_regular_file(output,error))return output.wstring();
+    PIDLIST_ABSOLUTE raw=nullptr;
+    if(packaged&&FAILED(SHParseDisplayName(target.c_str(),nullptr,&raw,0,nullptr)))return {};
+    const std::unique_ptr<ITEMIDLIST,decltype(&CoTaskMemFree)> item(raw,CoTaskMemFree);
+    SHFILEINFOW information{};
+    const auto source=raw?reinterpret_cast<PCWSTR>(raw):path.c_str();
+    const auto flags=SHGFI_ICON|SHGFI_SMALLICON|(raw?SHGFI_PIDL:0);
+    if(!SHGetFileInfoW(source,0,&information,sizeof(information),flags)||!information.hIcon)
+        return {};
+    const std::unique_ptr<std::remove_pointer_t<HICON>,decltype(&DestroyIcon)> icon(information.hIcon,DestroyIcon);
+    fs::create_directories(cache,error);
+    if(error)return {};
+    const auto temporary=cache/(wide(key)+L"-"+std::to_wstring(GetCurrentProcessId())+L".tmp");
+    const auto write_bitmap=[&] {
+        ComPtr<IWICImagingFactory> imaging;
+        ComPtr<IWICBitmap> bitmap;
+        ComPtr<IWICStream> stream;
+        ComPtr<IWICBitmapEncoder> encoder;
+        ComPtr<IWICBitmapFrameEncode> frame;
+        if(FAILED(CoCreateInstance(CLSID_WICImagingFactory,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&imaging)))||
+            FAILED(imaging->CreateBitmapFromHICON(icon.get(),&bitmap))||
+            FAILED(imaging->CreateStream(&stream))||FAILED(stream->InitializeFromFilename(temporary.c_str(),GENERIC_WRITE))||
+            FAILED(imaging->CreateEncoder(GUID_ContainerFormatPng,nullptr,&encoder))||
+            FAILED(encoder->Initialize(stream.Get(),WICBitmapEncoderNoCache))||
+            FAILED(encoder->CreateNewFrame(&frame,nullptr))||FAILED(frame->Initialize(nullptr))||
+            FAILED(frame->WriteSource(bitmap.Get(),nullptr))||FAILED(frame->Commit()))return false;
+        return SUCCEEDED(encoder->Commit());
+    };
+    if(write_bitmap())MoveFileExW(temporary.c_str(),output.c_str(),MOVEFILE_REPLACE_EXISTING);
+    fs::remove(temporary,error);
+    return fs::is_regular_file(output,error)?output.wstring():std::wstring{};
+}
 std::wstring everything_search_argument(std::wstring_view query) {
     std::wstring out=L"\"";
     for(auto ch:everything_search_group(query)) {
@@ -397,27 +495,11 @@ Json run_shell_view_action(IShellView& view, HWND frame, std::string_view action
     const auto language=parameters.value("language",std::string("auto"));
     const bool chinese=language=="zh-CN"||(language=="auto"&&PRIMARYLANGID(GetUserDefaultUILanguage())==LANG_CHINESE);
     const std::wstring base=chinese?L"新建文件夹":L"New folder";
-    fs::path created;
     if(GetForegroundWindow()!=frame)throw Error(5,"Explorer left the foreground before folder creation");
-    for(unsigned index=1;index<=1000;++index) {
-        auto name=index==1?base:base+L" ("+std::to_wstring(index)+L")";
-        auto candidate=fs::path(path)/name;
-        if(CreateDirectoryW(candidate.c_str(),nullptr)) {
-            created=std::move(candidate);
-            break;
-        }
-        auto error=GetLastError();
-        if(error!=ERROR_ALREADY_EXISTS&&error!=ERROR_FILE_EXISTS)throw Error(5,system_error("Create folder",error));
-    }
-    if(created.empty())throw Error(5,"No available default folder name");
-    SHChangeNotify(SHCNE_MKDIR,SHCNF_PATHW|SHCNF_FLUSH,created.c_str(),nullptr);
+    const auto created=shell_create_item(frame,path,base,true,{},true);
     bool rename=false;
-    PIDLIST_ABSOLUTE raw{};
-    const auto hr=SHParseDisplayName(created.c_str(),nullptr,&raw,0,nullptr);
-    std::unique_ptr<ITEMIDLIST,decltype(&CoTaskMemFree)> item(raw,CoTaskMemFree);
-    if(SUCCEEDED(hr)&&item&&GetForegroundWindow()==frame)try {
-        if(directory_key(view_path(view))==directory_key(path))
-            rename=view.SelectItem(ILFindLastID(item.get()),SVSI_EDIT|SVSI_DESELECTOTHERS|SVSI_ENSUREVISIBLE|SVSI_FOCUSED)==S_OK;
+    if(GetForegroundWindow()==frame)try {
+        rename=select_created_item(view,created,true);
     }catch(const std::exception&){}
     return {{"created",true},{"path",utf8(created.wstring())},{"rename_requested",rename},{"partial",!rename},
         {"message",rename?(chinese?"已创建文件夹，并请求进入重命名。":"Folder created and rename requested."):

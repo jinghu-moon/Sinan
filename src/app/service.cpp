@@ -5,6 +5,7 @@
 #include "formatter/formatter.hpp"
 #include "platform/explorer.hpp"
 #include "installer/startup.hpp"
+#include "platform/command_templates.hpp"
 #include "installer/install.hpp"
 #include "compat/symbols.hpp"
 #include "platform/shell_actions.hpp"
@@ -102,9 +103,37 @@ static Json application_action_impl(const fs::path& root,const Json& request) {
     if(action=="appearance.get")return response(appearance_json(ConfigStore(root).load().tabs));
     if(action=="appearance.settings.get")return response(tab_appearance_settings(ConfigStore(root).load()));
     if(action=="command-bar.get") {
-        const auto settings=ConfigStore(root).load().command_bar;
+        const auto config=ConfigStore(root).load();
+        const auto& settings=config.command_bar;
         const auto state=observer_status(root).value("command_bar",Json{{"state",settings.enabled?"waiting":"disabled"}});
-        return response({{"command_bar",command_bar_json(settings)},{"command_bar_application",state}});
+        Json catalog=Json::array();
+        const auto actions=action_catalog(config.features.at("scripts").at("entries"),{});
+        for(const auto& action:actions.at("actions")) {
+            const auto id=action.at("id").get<std::string>();
+            if(id.starts_with("explorer.")||id.starts_with("script.")||id=="tabs.pin"||id=="tabs.protect"||id=="tabs.lock")
+                if(id!="explorer.search_everything")catalog.push_back({{"id",id},{"label",action.at("name_zh")}});
+        }
+        for(const auto& entry:entries_from_json(config.features.at("directories").at("entries")))
+            if(entry.enabled)catalog.push_back({{"id","entry."+entry.id},{"label",utf8(entry.name)}});
+        return response({{"command_bar",command_bar_json(settings)},{"command_bar_application",state},{"command_bar_catalog",catalog}});
+    }
+    if(action=="command-bar.templates.preview") {
+        const auto settings=command_bar_from_json({{"templates",request.at("templates")}});
+        const auto options=command_templates(root,settings.templates);
+        Json rows=Json::array();
+        const auto sample=fs::path(wide(request.value("directory",std::string("C:\\项目\\会议资料"))));
+        for(const auto& entry:list_command_templates(options))
+            rows.push_back({{"label",utf8(entry.label)},{"filename",utf8(template_name(entry.path.filename().wstring(),sample,options.variables))}});
+        return response({{"templates",std::move(rows)},{"directory",utf8(options.directory.wstring())}});
+    }
+    if(action=="command-bar.arguments.preview") {
+        std::vector<std::pair<std::wstring,bool>> selected;
+        for(const auto& selection:request.at("selection"))
+            selected.emplace_back(wide(selection.at("path").get<std::string>()),selection.at("folder").get<bool>());
+        Json arguments=Json::array();
+        for(const auto& argument:command_arguments(request.at("source").get<std::string>(),wide(request.at("directory").get<std::string>()),selected))
+            arguments.push_back(utf8(quote_argument(argument)));
+        return response({{"arguments",std::move(arguments)}});
     }
     if(action=="command-bar.save") {
         const auto settings=command_bar_from_json(request.at("settings"));
