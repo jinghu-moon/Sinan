@@ -10,7 +10,8 @@ inline constexpr wchar_t folder_size_message[] = L"Sinan.FolderSizeBridge.1";
 inline std::wstring layout_mapping(DWORD pid, uint64_t nonce) {
     return L"Local\\Sinan-Layout-" + std::to_wstring(pid) + L"-" + std::to_wstring(nonce);
 }
-enum class LayoutAction : uint32_t { apply = 1, restore = 2, inspect = 3, search_enable = 4, search_disable = 5, folder_sizes = 6, selection_status = 7 };
+enum class LayoutAction : uint32_t { apply = 1, restore = 2, inspect = 3, search_enable = 4, search_disable = 5,
+    folder_sizes = 6, selection_status = 7, command_bar_enable = 8, command_bar_disable = 9, command_bar_inspect = 10 };
 struct LayoutOptions {
     TabAppearance tabs;
     bool search_box_hidden = false;
