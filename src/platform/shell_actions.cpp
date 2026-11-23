@@ -18,7 +18,14 @@ using Microsoft::WRL::ComPtr;
 namespace {
 struct Clipboard {
     explicit Clipboard(HWND owner=nullptr) {
-        if(!OpenClipboard(owner))throw Error(5,system_error("Open clipboard"));
+        constexpr unsigned retries=5;
+        for(unsigned attempt=0;;++attempt) {
+            if(OpenClipboard(owner))return;
+            const auto error=GetLastError();
+            if(error!=ERROR_ACCESS_DENIED||attempt==retries)
+                throw Error(5,system_error("Open clipboard",error));
+            Sleep(10);
+        }
     }
     ~Clipboard(){CloseClipboard();}
 };
