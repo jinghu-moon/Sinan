@@ -1,4 +1,5 @@
 #include "app/service.hpp"
+#include "platform/command_templates.hpp"
 #include "platform/shell_actions.hpp"
 #include <iostream>
 #include <functional>
@@ -59,6 +60,52 @@ try{
  rejects([]{command_bar_from_json({{"system_order",{"view","more"}}});});
  rejects([]{command_bar_from_json({{"hover_delay",50}});});
  expect(!fs::exists(root),"Command bar import leaves the saved config untouched");
+ const auto template_root=root/L"template-assay";
+ const auto sample_directory=template_root/L"模板";
+ const auto new_plus=template_root/L"Microsoft"/L"PowerToys"/L"NewPlus";
+ fs::create_directories(new_plus);
+ fs::create_directories(sample_directory/L"03 文件夹");
+ atomic_write(new_plus/L"settings.json",Json{{"properties",{
+     {"TemplateLocation",{{"value",utf8(sample_directory.wstring())}}},
+     {"HideFileExtension",{{"value",true}}},{"HideStartingDigits",{{"value",1}}},
+     {"ReplaceVariables",{{"value","true"}}}}}}.dump());
+ atomic_write(sample_directory/L"10 $PARENT_FOLDER_NAME.txt","template");
+ atomic_write(sample_directory/L"2 记事.txt","template");
+ atomic_write(sample_directory/L"01 private.txt","hidden");
+ atomic_write(sample_directory/L"01 system.txt","system");
+ atomic_write(sample_directory/L"desktop.ini","");
+ expect(SetFileAttributesW((sample_directory/L"01 private.txt").c_str(),FILE_ATTRIBUTE_HIDDEN)!=FALSE,
+     "Template fixture has a hidden item");
+ expect(SetFileAttributesW((sample_directory/L"01 system.txt").c_str(),FILE_ATTRIBUTE_SYSTEM)!=FALSE,
+     "Template fixture has a system item");
+ {
+     struct RestoreLocalAppData {
+         std::wstring original=env(L"LOCALAPPDATA");
+         ~RestoreLocalAppData(){SetEnvironmentVariableW(L"LOCALAPPDATA",original.empty()?nullptr:original.c_str());}
+     } restore;
+     expect(SetEnvironmentVariableW(L"LOCALAPPDATA",template_root.c_str())!=FALSE,"Redirect New+ settings in the test process");
+     const auto result=call({{"action","command-bar.templates.preview"},{"templates",{{"new_plus",true}}},
+         {"directory","D:\\项目\\会议 记录"}}).at("result");
+     expect(result.at("directory")==utf8(sample_directory.wstring()),"New+ template directory is read from its settings");
+     expect(result.at("templates")==Json::array({
+         {{"label","文件夹"},{"filename","03 文件夹"}},
+         {{"label","记事"},{"filename","2 记事.txt"}},
+         {{"label","$PARENT_FOLDER_NAME"},{"filename","10 会议 记录.txt"}}}),
+         "Template preview sorts folders first, filters hidden and system files, and applies New+ naming");
+ }
+ fs::remove_all(template_root);
+ fs::remove(root);
+ const std::wstring working=L"D:\\项目\\当前 文件夹";
+ const std::vector<std::pair<std::wstring,bool>> selection{{working+L"\\文件 A.txt",false},{working+L"\\子 文件夹",true}};
+ expect(command_arguments("all",working,selection)==std::vector<std::wstring>{selection[0].first,selection[1].first},
+     "Application arguments preserve selected path order");
+ expect(command_arguments("files",working,selection)==std::vector<std::wstring>{selection[0].first}&&
+     command_arguments("folders",working,selection)==std::vector<std::wstring>{selection[1].first},
+     "Application arguments filter files and folders");
+ expect(command_arguments("smart_folder",working,selection)==std::vector<std::wstring>{working}&&
+     command_arguments("smart_folder",working,{selection[1]})==std::vector<std::wstring>{selection[1].first},
+     "Smart folder follows a single selected directory");
+ expect(command_arguments("first",working,{}).empty(),"Missing selection yields no required application argument");
  auto listed=call({{"action","actions.list"},{"query","固定"}}).at("result");
  expect(listed.at("count").get<int>()>0,"Chinese action discovery");
  expect(!fs::exists(root),"Action discovery does not create state");
