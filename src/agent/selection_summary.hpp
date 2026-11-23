@@ -12,6 +12,7 @@ public:
     SelectionSummary();
     ~SelectionSummary();
     void synchronize(const std::vector<NativeTab>& windows, const Config& config, bool chinese);
+    uint64_t selection_revision(HWND frame) const;
     void poll(ShellTabEnumerator& enumerator);
     DWORD wait_time(DWORD limit) const;
     Json status() const;

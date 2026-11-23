@@ -28,6 +28,7 @@ struct CommandBarSettings {
     std::vector<std::string> hidden;
     std::vector<std::string> icon_only;
     std::vector<std::string> hidden_separators;
+    Json conditions=Json::object();
     bool operator==(const CommandBarSettings&) const = default;
 };
 

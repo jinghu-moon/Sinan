@@ -108,6 +108,7 @@ struct SelectionSummary::State {
         HWND surface{};
         uint64_t due{};
         uint64_t generation{};
+        uint64_t selection_revision{};
         bool applied{};
         std::string error;
         std::wstring text;
@@ -164,6 +165,7 @@ struct SelectionSummary::State {
             return;
         }
         observing->schedule(found->second);
+        found->second.selection_revision=observing->revision;
     }
 
     bool write(const Target& target, HWND surface, std::wstring_view text) {
@@ -208,7 +210,8 @@ SelectionSummary::~SelectionSummary() { stop(); }
 void SelectionSummary::synchronize(const std::vector<NativeTab>& windows, const Config& config, bool chinese) {
     auto& state = *state_;
     const auto& options = config.selection_summary;
-    if (!options.show_files && !options.show_folders && !options.show_size) {
+    const bool summarize=options.show_files||options.show_folders||options.show_size;
+    if (!summarize && !config.command_bar.enabled) {
         stop();
         return;
     }
@@ -234,15 +237,22 @@ void SelectionSummary::synchronize(const std::vector<NativeTab>& windows, const 
         if (changed && !inserted && target.surface) state.schedule(target);
         // Some Shell views omit accessibility events for programmatic selection.
         // Reuse the existing scan for a foreground check without repeating size queries.
-        if (target.surface && frame.window == foreground && !target.due &&
+        if (!summarize)state.restore(target);
+        if (summarize && target.surface && frame.window == foreground && !target.due &&
             (!state.pending || state.pending->frame != frame.window))
             target.due = GetTickCount64();
     }
     std::erase_if(state.targets, [](const auto& item) { return !IsWindow(item.first); });
 }
 
+uint64_t SelectionSummary::selection_revision(HWND frame) const {
+    const auto found=state_->targets.find(frame);
+    return found==state_->targets.end()?0:found->second.selection_revision;
+}
+
 void SelectionSummary::poll(ShellTabEnumerator& enumerator) {
     auto& state = *state_;
+    const bool show_summary=state.options.show_files||state.options.show_folders||state.options.show_size;
     if (state.pending && state.pending->result.wait_for(std::chrono::seconds(0)) == std::future_status::ready) {
         auto job = std::move(*state.pending);
         state.pending.reset();
@@ -250,7 +260,7 @@ void SelectionSummary::poll(ShellTabEnumerator& enumerator) {
         if (found != state.targets.end()) {
             auto& target = found->second;
             state.refresh_surface(target);
-            if (target.generation == job.generation && target.surface == job.surface) {
+            if (show_summary && target.generation == job.generation && target.surface == job.surface) {
                 try {
                     state.display(target, job.result.get());
                 } catch (const std::exception& error) {
@@ -260,6 +270,7 @@ void SelectionSummary::poll(ShellTabEnumerator& enumerator) {
             }
         }
     }
+    if(!show_summary)return;
     const auto now = GetTickCount64();
     for (auto& [frame, target] : state.targets) {
         if (target.verify_at && now >= target.verify_at) {
@@ -305,6 +316,7 @@ void SelectionSummary::poll(ShellTabEnumerator& enumerator) {
 }
 
 DWORD SelectionSummary::wait_time(DWORD limit) const {
+    if(!state_->options.show_files&&!state_->options.show_folders&&!state_->options.show_size)return limit;
     if (state_->pending) limit = std::min<DWORD>(limit, 50);
     const auto now = GetTickCount64();
     for (const auto& [frame, target] : state_->targets)

@@ -112,6 +112,9 @@ struct CommandBar {
     std::optional<int32_t> original_overflow;
     ComPtr<IWeakReference> terminal;
     EventRegistrationToken terminal_click{};
+    ComPtr<IWeakReference> menu;
+    EventRegistrationToken menu_click{};
+    ComPtr<IInspectable> open_menu;
     std::vector<Element> customized;
     std::vector<ComPtr<IWeakReference>> added_tooltips;
     std::optional<CommandBarSettings> applied_settings;
@@ -126,6 +129,9 @@ thread_local std::optional<CommandBarSettings> command_bar_settings;
 thread_local bool command_bar_chinese = true;
 thread_local std::vector<uintptr_t> command_bar_filesystem_tabs;
 thread_local HWND command_bar_window = nullptr;
+thread_local DWORD command_bar_agent_thread=0;
+thread_local uint64_t command_bar_menu_request=0;
+thread_local ComPtr<IWeakReference> command_bar_menu_anchor;
 thread_local Json pending_command_bar_actions=Json::array();
 // The pinned runtime uses the IInspectable identity pointer as its handle.
 // An older diagnostics listener can unregister the shared cache before our
@@ -284,24 +290,228 @@ HWND visible_browser(HWND window) {
     return child;
 }
 
-class TerminalClick final : public RuntimeClass<RuntimeClassFlags<Microsoft::WRL::ClassicCom>,IXamlRoutedEventHandler> {
+void queue_command_action(HWND window, HWND child, Json action) {
+    if(!window||!child||window!=GetForegroundWindow()||GetWindowThreadProcessId(window,nullptr)!=GetCurrentThreadId()||
+        command_bar_expires<=GetTickCount64()||!command_bar_settings||pending_command_bar_actions.size()>=16)return;
+    action["window"]=reinterpret_cast<uintptr_t>(window);
+    action["child"]=reinterpret_cast<uintptr_t>(child);
+    pending_command_bar_actions.push_back(std::move(action));
+    if(command_bar_agent_thread)PostThreadMessageW(command_bar_agent_thread,RegisterWindowMessageW(command_bar_wake_message),
+        reinterpret_cast<WPARAM>(window),0);
+}
+
+class CommandClick final : public RuntimeClass<RuntimeClassFlags<Microsoft::WRL::ClassicCom>,IXamlRoutedEventHandler> {
 public:
-    HRESULT STDMETHODCALLTYPE Invoke(IInspectable*,IInspectable*) override {
+    explicit CommandClick(std::string action) : action_(std::move(action)) {}
+    HRESULT STDMETHODCALLTYPE Invoke(IInspectable* sender,IInspectable*) override {
         try {
-            if(command_bar_expires<=GetTickCount64()||!command_bar_settings||!command_bar_settings->terminal||
-                pending_command_bar_actions.size()>=16)return S_OK;
             const auto window=GetAncestor(GetActiveWindow(),GA_ROOT);
-            if(!window||window!=GetForegroundWindow()||GetWindowThreadProcessId(window,nullptr)!=GetCurrentThreadId())return S_OK;
             const auto child=visible_browser(window);
-            if(child)pending_command_bar_actions.push_back({{"window",reinterpret_cast<uintptr_t>(window)},
-                {"child",reinterpret_cast<uintptr_t>(child)}});
+            Json event={{"action",action_}};
+            if(action_=="menu") {
+                if(!sender)return S_OK;
+                command_bar_menu_anchor=weak_reference(sender);
+                event["generation"]=++command_bar_menu_request;
+            }
+            queue_command_action(window,child,std::move(event));
         }catch(...){return winrt::to_hresult();}
         return S_OK;
     }
+private:
+    std::string action_;
 };
 
-void apply_terminal(CommandBar& record, IXamlCommandVector& commands, bool desired) {
-    auto item=resolve_weak(record.terminal);
+class MenuClick final : public RuntimeClass<RuntimeClassFlags<Microsoft::WRL::ClassicCom>,IXamlRoutedEventHandler> {
+public:
+    MenuClick(HWND window,HWND child,uint64_t generation,std::string action)
+        :window_(window),child_(child),generation_(generation),action_(std::move(action)) {}
+    HRESULT STDMETHODCALLTYPE Invoke(IInspectable*,IInspectable*) override {
+        try {
+            if(generation_==command_bar_menu_request&&visible_browser(window_)==child_)
+                queue_command_action(window_,child_,{{"action",action_},{"generation",generation_}});
+        }catch(...){return winrt::to_hresult();}
+        return S_OK;
+    }
+private:
+    HWND window_,child_;
+    uint64_t generation_;
+    std::string action_;
+};
+
+std::wstring xaml_attribute(std::wstring_view value) {
+    std::wstring escaped;
+    if(value.starts_with(L'{'))escaped=L"{}";
+    for(const auto ch:value){
+        switch(ch) {
+            case L'&': escaped+=L"&amp;"; break;
+            case L'<': escaped+=L"&lt;"; break;
+            case L'>': escaped+=L"&gt;"; break;
+            case L'"': escaped+=L"&quot;"; break;
+            default: escaped+=ch<L' '?L' ':ch; break;
+        }
+    }
+    return escaped;
+}
+
+void render_menu_rows(std::wstring& markup,const Json& rows) {
+    for(const auto& row:rows) {
+        const auto title=wide(row.at("label").get<std::string>());
+        const auto limit=IS_HIGH_SURROGATE(title.size()>50?title[50]:0)?50:51;
+        const auto label=title.size()>54?title.substr(0,limit)+L"…":title;
+        const auto text=L" Text=\""+xaml_attribute(label)+L"\" ToolTipService.ToolTip=\""+xaml_attribute(title)+L"\"";
+        const auto state=row.value("enabled",true)?L"":L" IsEnabled=\"False\"";
+        if(row.contains("children")) {
+            markup+=L"<MenuFlyoutSubItem"+text+state+L">";
+            render_menu_rows(markup,row.at("children"));
+            markup+=L"</MenuFlyoutSubItem>";
+        } else if(row.contains("checked")) {
+            markup+=L"<ToggleMenuFlyoutItem"+text+state+
+                (row.at("checked").get<bool>()?L" IsChecked=\"True\" />":L" />");
+        } else {
+            markup+=L"<MenuFlyoutItem"+text+state+L" />";
+        }
+    }
+}
+
+void attach_menu_rows(IInspectable* items,const Json& rows,HWND window,HWND child,uint64_t generation) {
+    ComPtr<IXamlMenuItems> collection;
+    winrt::check_hresult(items->QueryInterface(IID_PPV_ARGS(&collection)));
+    uint32_t count=0;
+    winrt::check_hresult(collection->get_Size(&count));
+    if(count!=rows.size())winrt::throw_hresult(E_UNEXPECTED);
+    for(uint32_t index=0;index<count;++index) {
+        ComPtr<IInspectable> item;
+        winrt::check_hresult(collection->GetAt(index,&item));
+        const auto& row=rows.at(index);
+        if(row.contains("children")) {
+            ComPtr<IXamlMenuGroup> group;
+            ComPtr<IInspectable> children;
+            winrt::check_hresult(item.As(&group));
+            winrt::check_hresult(group->get_Items(&children));
+            attach_menu_rows(children.Get(),row.at("children"),window,child,generation);
+        } else {
+            ComPtr<IXamlMenuItem> command;
+            winrt::check_hresult(item.As(&command));
+            auto handler=Microsoft::WRL::Make<MenuClick>(window,child,generation,row.at("action").get<std::string>());
+            if(!handler)winrt::throw_hresult(E_OUTOFMEMORY);
+            EventRegistrationToken token{};
+            winrt::check_hresult(command->add_Click(handler.Get(),&token));
+        }
+    }
+}
+
+void refresh_menu_rows(IInspectable* items,const Json& rows) {
+    ComPtr<IXamlMenuItems> collection;
+    winrt::check_hresult(items->QueryInterface(IID_PPV_ARGS(&collection)));
+    uint32_t count=0;
+    winrt::check_hresult(collection->get_Size(&count));
+    if(count!=rows.size())winrt::throw_hresult(E_UNEXPECTED);
+    for(uint32_t index=0;index<count;++index) {
+        ComPtr<IInspectable> item;
+        ComPtr<IXamlControl> control;
+        ComPtr<IXamlElement> element;
+        winrt::check_hresult(collection->GetAt(index,&item));
+        winrt::check_hresult(item.As(&control));
+        winrt::check_hresult(item.As(&element));
+        const auto& row=rows.at(index);
+        winrt::check_hresult(control->put_IsEnabled(row.value("enabled",true)));
+        winrt::check_hresult(element->put_Visibility(row.value("hidden",false)?1:0));
+        auto label=wide(row.at("label").get<std::string>());
+        const auto limit=IS_HIGH_SURROGATE(label.size()>50?label[50]:0)?50:51;
+        const winrt::hstring text(label.size()>54?label.substr(0,limit)+L"…":label);
+        const auto abi_text=static_cast<HSTRING>(winrt::get_abi(text));
+        if(row.contains("children")) {
+            ComPtr<IXamlMenuGroup> group;
+            ComPtr<IInspectable> children;
+            winrt::check_hresult(item.As(&group));
+            winrt::check_hresult(group->put_Text(abi_text));
+            winrt::check_hresult(group->get_Items(&children));
+            refresh_menu_rows(children.Get(),row.at("children"));
+        } else {
+            ComPtr<IXamlMenuItem> command;
+            winrt::check_hresult(item.As(&command));
+            winrt::check_hresult(command->put_Text(abi_text));
+            if(row.contains("checked")) {
+                ComPtr<IXamlToggleMenuItem> toggle;
+                winrt::check_hresult(item.As(&toggle));
+                winrt::check_hresult(toggle->put_IsChecked(row.at("checked").get<bool>()));
+            }
+        }
+        auto tooltips=xaml_factory<style::IToolTipStatics>(L"Microsoft.UI.Xaml.Controls.ToolTipService");
+        ComPtr<IInspectable> dependency;
+        if(tooltips&&SUCCEEDED(item->QueryInterface(xaml_dependency_object,&dependency))) {
+            const auto tooltip=winrt::box_value(winrt::hstring(label));
+            winrt::check_hresult(tooltips->SetToolTip(dependency.Get(),winrt::get_abi(tooltip)));
+        }
+    }
+}
+
+bool close_command_menu(CommandBar& record) {
+    if(!record.open_menu)return false;
+    ComPtr<IXamlFlyout> flyout;
+    winrt::check_hresult(record.open_menu.As(&flyout));
+    bool open=false;
+    winrt::check_hresult(flyout->get_IsOpen(&open));
+    if(open)winrt::check_hresult(flyout->Hide());
+    record.open_menu.Reset();
+    return open;
+}
+
+bool show_command_menu(HWND window,const Json& request) {
+    const auto generation=request.at("generation").get<uint64_t>();
+    auto child=reinterpret_cast<HWND>(request.at("child").get<uintptr_t>());
+    if(generation!=command_bar_menu_request||window!=GetForegroundWindow()||visible_browser(window)!=child)
+        throw Error(5,"Explorer changed tabs before the menu could open");
+    const auto anchor_item=resolve_weak(command_bar_menu_anchor);
+    for(auto& [handle,record]:command_bars) {
+        auto button=resolve_weak(record.menu);
+        if(!button||button.Get()!=anchor_item.Get()||!record.attached)continue;
+        if(request.value("refresh",false)) {
+            if(!record.open_menu)return false;
+            ComPtr<IXamlFlyout> flyout;
+            winrt::check_hresult(record.open_menu.As(&flyout));
+            bool open=false;
+            winrt::check_hresult(flyout->get_IsOpen(&open));
+            if(!open){record.open_menu.Reset();return false;}
+            if(request.value("close",false)){close_command_menu(record);return false;}
+            if(request.contains("rows")) {
+                ComPtr<IXamlMenuFlyout> menu;
+                ComPtr<IInspectable> items;
+                winrt::check_hresult(record.open_menu.As(&menu));
+                winrt::check_hresult(menu->get_Items(&items));
+                refresh_menu_rows(items.Get(),request.at("rows"));
+            }
+            return true;
+        }
+        close_command_menu(record);
+        auto reader=xaml_factory<style::IXamlReader>(L"Microsoft.UI.Xaml.Markup.XamlReader");
+        if(!reader)winrt::throw_hresult(E_NOINTERFACE);
+        std::wstring markup=L"<MenuFlyout xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\">";
+        const auto& rows=request.at("rows");
+        render_menu_rows(markup,rows);
+        markup+=L"</MenuFlyout>";
+        const winrt::hstring source(markup);
+        ComPtr<IInspectable> flyout,items;
+        winrt::check_hresult(reader->Load(static_cast<HSTRING>(winrt::get_abi(source)),&flyout));
+        ComPtr<IXamlMenuFlyout> menu;
+        ComPtr<style::IElementResources> anchor;
+        winrt::check_hresult(flyout.As(&menu));
+        winrt::check_hresult(button.As(&anchor));
+        winrt::check_hresult(menu->get_Items(&items));
+        attach_menu_rows(items.Get(),rows,window,child,generation);
+        refresh_menu_rows(items.Get(),rows);
+        double height=0;
+        winrt::check_hresult(anchor->get_ActualHeight(&height));
+        winrt::check_hresult(menu->ShowAt(anchor.Get(),{0,static_cast<float>(height)}));
+        record.open_menu=std::move(flyout);
+        return true;
+    }
+    throw Error(5,"Explorer command menu button is unavailable");
+}
+
+void apply_command_button(ComPtr<IWeakReference>& weak, EventRegistrationToken& click,
+                          IXamlCommandVector& commands, bool desired, bool menu) {
+    auto item=resolve_weak(weak);
     ComPtr<IXamlCommandBarElement> element;
     uint32_t index{};
     bool present=false;
@@ -313,42 +523,41 @@ void apply_terminal(CommandBar& record, IXamlCommandVector& commands, bool desir
         if(item) {
             ComPtr<IXamlButtonBase> button;
             winrt::check_hresult(item.As(&button));
-            winrt::check_hresult(button->remove_Click(record.terminal_click));
+            winrt::check_hresult(button->remove_Click(click));
             if(present)winrt::check_hresult(commands.RemoveAt(index));
         }
-        record.terminal.Reset();
+        weak.Reset();
         return;
     }
     if(!item) {
         auto reader=xaml_factory<style::IXamlReader>(L"Microsoft.UI.Xaml.Markup.XamlReader");
         if(!reader)winrt::throw_hresult(E_NOINTERFACE);
-        const std::wstring caption=command_bar_chinese?L"在此打开终端":L"Open terminal here";
+        const std::wstring caption=menu?(command_bar_chinese?L"司南":L"Sinan"):
+            (command_bar_chinese?L"在此打开终端":L"Open terminal here");
+        const std::wstring automation_id=menu?L"SinanCommandMenu":L"SinanOpenTerminal";
         const winrt::hstring markup(L"<AppBarButton xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\" "
-            L"AutomationProperties.AutomationId=\"SinanOpenTerminal\" AutomationProperties.Name=\""+caption+
-            L"\" ToolTipService.ToolTip=\""+caption+L"\" LabelPosition=\"Collapsed\">"
-            L"<AppBarButton.Icon><FontIcon FontFamily=\"Segoe Fluent Icons\" Glyph=\"&#xE756;\" />"
+            L"AutomationProperties.AutomationId=\""+automation_id+L"\" AutomationProperties.Name=\""+caption+
+            L"\" ToolTipService.ToolTip=\""+caption+L"\" Label=\""+caption+(menu?L" ▾":L"")+
+            L"\" LabelPosition=\""+(menu?L"Default":L"Collapsed")+L"\">"
+            L"<AppBarButton.Icon><FontIcon FontFamily=\"Segoe Fluent Icons\" Glyph=\""+(menu?L"&#xE8B7;":L"&#xE756;")+L"\" />"
             L"</AppBarButton.Icon></AppBarButton>");
         winrt::check_hresult(reader->Load(static_cast<HSTRING>(winrt::get_abi(markup)),&item));
         winrt::check_hresult(item.As(&element));
         ComPtr<IXamlButtonBase> button;
         winrt::check_hresult(item.As(&button));
-        auto handler=Microsoft::WRL::Make<TerminalClick>();
+        auto handler=Microsoft::WRL::Make<CommandClick>(menu?"menu":"explorer.open_terminal");
         if(!handler)winrt::throw_hresult(E_OUTOFMEMORY);
-        auto weak=weak_reference(item.Get());
-        winrt::check_hresult(button->add_Click(handler.Get(),&record.terminal_click));
-        record.terminal=std::move(weak);
+        auto reference=weak_reference(item.Get());
+        winrt::check_hresult(button->add_Click(handler.Get(),&click));
+        weak=std::move(reference);
     }
-    ComPtr<IXamlAppBarButton> button;
-    winrt::check_hresult(item.As(&button));
-    const winrt::hstring label(command_bar_chinese?L"在此打开终端":L"Open terminal here");
-    winrt::check_hresult(button->put_Label(static_cast<HSTRING>(winrt::get_abi(label))));
     const auto child=reinterpret_cast<uintptr_t>(visible_browser(command_bar_window));
     const bool can_open=child&&std::find(command_bar_filesystem_tabs.begin(),command_bar_filesystem_tabs.end(),child)!=command_bar_filesystem_tabs.end();
     ComPtr<IXamlControl> control;
     winrt::check_hresult(item.As(&control));
     bool enabled=false;
     winrt::check_hresult(control->get_IsEnabled(&enabled));
-    if(enabled!=can_open)winrt::check_hresult(control->put_IsEnabled(can_open));
+    if(enabled!=(menu||can_open))winrt::check_hresult(control->put_IsEnabled(menu||can_open));
     if(!present)winrt::check_hresult(commands.Append(element.Get()));
 }
 
@@ -407,8 +616,13 @@ Json refresh_command_bars(std::optional<bool> enabled, bool measure = false, boo
         if (apply==true) observe_commands(record,commands.Get());
         if(apply) {
             if(command_bar_settings||!record.customized.empty())apply_system_commands(record,bar.Get(),commands.Get(),*apply&&command_bar_settings.has_value());
-            if(record.secondary&&(command_bar_settings||record.terminal))
-                apply_terminal(record,*commands.Get(),*apply&&command_bar_settings&&command_bar_settings->terminal);
+            if(record.secondary&&(command_bar_settings||record.terminal||record.menu)) {
+                const bool configured=*apply&&command_bar_settings.has_value();
+                apply_command_button(record.terminal,record.terminal_click,*commands.Get(),
+                    configured&&command_bar_settings->terminal,false);
+                apply_command_button(record.menu,record.menu_click,*commands.Get(),configured&&command_bar_agent_thread,true);
+                if(!configured)close_command_menu(record);
+            }
         }
         ComPtr<IXamlCommandBar> control;
         int32_t more_visibility=0;
@@ -481,6 +695,8 @@ void CALLBACK restore_command_bar_timer(HWND, UINT, UINT_PTR id, DWORD) {
     command_bar_settings.reset();
     command_bar_filesystem_tabs.clear();
     command_bar_window=nullptr;
+    command_bar_agent_thread=0;
+    command_bar_menu_anchor.Reset();
     pending_command_bar_actions.clear();
 }
 
@@ -1049,6 +1265,19 @@ void execute(LayoutPacket& packet) {
     DWORD pid{};auto thread=GetWindowThreadProcessId(reinterpret_cast<HWND>(packet.window),&pid);
     if(pid!=GetCurrentProcessId()||thread!=GetCurrentThreadId()||bridge_process_started(GetCurrentProcess())!=packet.target_started)
         throw Error(4,"布局目标身份或 UI 线程已变化");
+    if(packet.action==LayoutAction::command_bar_events||packet.action==LayoutAction::command_bar_menu) {
+        if(command_bar_expires<=GetTickCount64()||
+            command_bar_owner!=packet.sender_pid||command_bar_owner_started!=packet.sender_started)
+            throw Error(4,"The command bar owner changed");
+        Json report=Json::object();
+        if(packet.action==LayoutAction::command_bar_events)
+            report["actions"]=std::exchange(pending_command_bar_actions,Json::array());
+        else
+            report["open"]=show_command_menu(reinterpret_cast<HWND>(packet.window),Json::parse(packet.report));
+        strcpy_s(packet.report,report.dump().c_str());
+        packet.result=S_OK;
+        return;
+    }
     if(packet.action==LayoutAction::command_bar_enable||packet.action==LayoutAction::command_bar_disable||
         packet.action==LayoutAction::command_bar_inspect) {
         initialize();
@@ -1074,7 +1303,16 @@ void execute(LayoutPacket& packet) {
                     command_bar_chinese=request.value("chinese",true);
                     command_bar_filesystem_tabs=request.value("filesystem_tabs",std::vector<uintptr_t>{});
                     command_bar_window=reinterpret_cast<HWND>(packet.window);
-                } else command_bar_settings.reset();
+                    command_bar_agent_thread=request.value("agent_thread",DWORD{});
+                    if(command_bar_agent_thread) {
+                        Handle agent_thread(OpenThread(THREAD_QUERY_LIMITED_INFORMATION,FALSE,command_bar_agent_thread));
+                        if(!agent_thread||GetProcessIdOfThread(agent_thread.get())!=packet.sender_pid)
+                            throw Error(4,"The command bar agent thread changed");
+                    }
+                } else {
+                    command_bar_settings.reset();
+                    command_bar_agent_thread=0;
+                }
                 if(!command_bar_lease_timer) {
                     command_bar_lease_timer=SetTimer(nullptr,0,1000,restore_command_bar_timer);
                     if(!command_bar_lease_timer)winrt::throw_last_error();

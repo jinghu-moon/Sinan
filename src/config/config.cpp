@@ -59,12 +59,14 @@ SelectionSummarySettings selection_summary_from_json(const Json& value) {
 }
 
 Json command_bar_json(const CommandBarSettings& settings) {
-    return {{"enabled",settings.enabled},{"terminal",settings.terminal},{"hidden",settings.hidden},
+    auto result=Json{{"enabled",settings.enabled},{"terminal",settings.terminal},{"hidden",settings.hidden},
         {"icon_only",settings.icon_only},{"hidden_separators",settings.hidden_separators}};
+    if(!settings.conditions.empty())result["conditions"]=settings.conditions;
+    return result;
 }
 
 CommandBarSettings command_bar_from_json(const Json& value) {
-    keys(value,{"enabled","terminal","hidden","icon_only","hidden_separators"});
+    keys(value,{"enabled","terminal","hidden","icon_only","hidden_separators","conditions"});
     CommandBarSettings settings;
     const auto read_list=[&](const char* key,const auto& allowed) {
         const auto items=value.value(key,std::vector<std::string>{});
@@ -83,6 +85,29 @@ CommandBarSettings command_bar_from_json(const Json& value) {
     settings.hidden=read_list("hidden",command_bar_buttons);
     settings.icon_only=read_list("icon_only",command_bar_labels);
     settings.hidden_separators=read_list("hidden_separators",command_bar_separators);
+    const auto conditions=value.value("conditions",Json::object());
+    if(!conditions.is_object()||conditions.size()>100)throw Error(2,"Invalid command bar selection conditions");
+    for(const auto& [action,rule]:conditions.items()) {
+        if(action.empty()||action.size()>120)throw Error(2,"Invalid command bar action reference");
+        keys(rule,{"count","kind","extensions","hide"});
+        const auto count=rule.value("count",std::string("any"));
+        const auto kind=rule.value("kind",std::string("any"));
+        if(count!="any"&&count!="none"&&count!="one"&&count!="multiple")
+            throw Error(2,"Invalid command bar selection count");
+        if(kind!="any"&&kind!="files"&&kind!="folders")throw Error(2,"Invalid command bar selection kind");
+        auto extensions=rule.value("extensions",std::vector<std::string>{});
+        if(extensions.size()>32)throw Error(2,"Too many command bar selection extensions");
+        for(auto& extension:extensions) {
+            if(extension.size()<2||extension.size()>24||extension.front()!='.'||
+                extension.find_first_of("*?:\\/ \t\r\n")!=extension.npos)
+                throw Error(2,"Invalid command bar selection extension");
+            std::transform(extension.begin(),extension.end(),extension.begin(),[](char ch){
+                return ch>='A'&&ch<='Z'?static_cast<char>(ch+('a'-'A')):ch;
+            });
+        }
+        settings.conditions[action]={{"count",count},{"kind",kind},{"extensions",std::move(extensions)},
+            {"hide",rule.value("hide",false)}};
+    }
     return settings;
 }
 

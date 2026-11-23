@@ -74,6 +74,77 @@ MIDL_INTERFACE("8AB0E278-B6AE-569E-8DCD-D293552FE4D5") IXamlAppBarButton : publi
 MIDL_INTERFACE("DAE23D85-69CA-5BDF-805B-6161A3A215CC") IXamlRoutedEventHandler : public IUnknown {
     virtual HRESULT STDMETHODCALLTYPE Invoke(IInspectable*, IInspectable*) = 0;
 };
+MIDL_INTERFACE("BB6603BF-744D-5C31-A87D-744394634D77") IXamlFlyout : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_Placement(int32_t*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Placement(int32_t) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Target(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_AllowFocusOnInteraction(bool*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_AllowFocusOnInteraction(bool) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_LightDismissOverlayMode(int32_t*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_LightDismissOverlayMode(int32_t) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_AllowFocusWhenDisabled(bool*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_AllowFocusWhenDisabled(bool) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_ShowMode(int32_t*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_ShowMode(int32_t) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_InputDevicePrefersPrimaryCommands(bool*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_AreOpenCloseAnimationsEnabled(bool*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_AreOpenCloseAnimationsEnabled(bool) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_ShouldConstrainToRootBounds(bool*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_ShouldConstrainToRootBounds(bool) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsConstrainedToRootBounds(bool*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_ElementSoundMode(int32_t*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_ElementSoundMode(int32_t) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_OverlayInputPassThroughElement(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_OverlayInputPassThroughElement(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_IsOpen(bool*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_XamlRoot(void**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_XamlRoot(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_Opened(void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_Opened(EventRegistrationToken) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_Closed(void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_Closed(EventRegistrationToken) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_Opening(void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_Opening(EventRegistrationToken) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_Closing(void*, EventRegistrationToken*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE remove_Closing(EventRegistrationToken) = 0;
+    virtual HRESULT STDMETHODCALLTYPE ShowAt(void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE ShowAtWithOptions(void*, void*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE Hide() = 0;
+    virtual HRESULT STDMETHODCALLTYPE TryInvokeKeyboardAccelerator(void*) = 0;
+};
+MIDL_INTERFACE("1803F260-67E4-5BC1-A63A-123510167BB8") IXamlToggleMenuItem : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_IsChecked(bool*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_IsChecked(bool) = 0;
+};
+MIDL_INTERFACE("F4C77C6C-1FA5-5D85-8559-5D02B7D4E5E7") IXamlMenuFlyout : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_Items(IInspectable**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_MenuFlyoutPresenterStyle(IInspectable**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_MenuFlyoutPresenterStyle(IInspectable*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE ShowAt(IInspectable*, XamlPoint) = 0;
+};
+MIDL_INTERFACE("EBE273F7-4731-5AC8-8513-DE764868FB9B") IXamlMenuItems : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE GetAt(uint32_t, IInspectable**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Size(uint32_t*) = 0;
+};
+MIDL_INTERFACE("6B0688C1-47B0-53B5-B6F9-5EC5D6623B84") IXamlMenuGroup : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_Items(IInspectable**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Text(HSTRING*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Text(HSTRING) = 0;
+};
+MIDL_INTERFACE("4252DF5A-44F9-5EE8-B1CC-53DE9AAA4095") IXamlMenuItem : public IInspectable {
+    virtual HRESULT STDMETHODCALLTYPE get_Text(HSTRING*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Text(HSTRING) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Command(IInspectable**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Command(IInspectable*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_CommandParameter(IInspectable**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_CommandParameter(IInspectable*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_Icon(IInspectable**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_Icon(IInspectable*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_KeyboardAcceleratorTextOverride(HSTRING*) = 0;
+    virtual HRESULT STDMETHODCALLTYPE put_KeyboardAcceleratorTextOverride(HSTRING) = 0;
+    virtual HRESULT STDMETHODCALLTYPE get_TemplateSettings(IInspectable**) = 0;
+    virtual HRESULT STDMETHODCALLTYPE add_Click(IXamlRoutedEventHandler*, EventRegistrationToken*) = 0;
+};
 MIDL_INTERFACE("65714269-2473-5327-A652-0EA6BCE7F403") IXamlButtonBase : public IInspectable {
     virtual HRESULT STDMETHODCALLTYPE get_ClickMode(int32_t*) = 0;
     virtual HRESULT STDMETHODCALLTYPE put_ClickMode(int32_t) = 0;

@@ -87,7 +87,7 @@ HRESULT add_tab(const NativeTab& tab,PCIDLIST_ABSOLUTE target,GUID* guid) {
     if(read<std::array<BYTE,16>>(tab.module_base+native_rva("add"))!=expected)throw Error(3,"Live AddTab function changed or is hooked");
     using Add=HRESULT(WINAPI*)(void*,PCIDLIST_ABSOLUTE,int,GUID*);return reinterpret_cast<Add>(tab.module_base+native_rva("add"))(object,target,0,guid);
 }
-ComPtr<IShellView> external_tab_view(const NativeTab& tab) {
+ComPtr<IShellBrowser> tab_shell_browser(const NativeTab& tab) {
     const auto host=tab.host+0x10;
     auto vtable=read<uintptr_t>(host);
     const auto getter=tab.module_base+native_rva("get_browser");
@@ -100,6 +100,11 @@ ComPtr<IShellView> external_tab_view(const NativeTab& tab) {
     if(FAILED(provider->QueryService(SID_STopLevelBrowser,IID_PPV_ARGS(&browser)))||!browser)return {};
     HWND child{};
     if(FAILED(browser->GetWindow(&child))||child!=tab.browser_window)return {};
+    return browser;
+}
+ComPtr<IShellView> external_tab_view(const NativeTab& tab) {
+    const auto browser=tab_shell_browser(tab);
+    if(!browser)return {};
     ComPtr<IShellView> view;
     if(FAILED(browser->QueryActiveShellView(&view)))return {};
     return view;
@@ -118,8 +123,8 @@ uintptr_t navigation_object(const NativeTab& tab) {
     if(vt!=tab.module_base+native_rva("host_interface")||read<uintptr_t>(vt+5*sizeof(uintptr_t))!=tab.module_base+native_rva("get_browser"))throw Error(3,"Live browser getter vtable changed");
     constexpr std::array<BYTE,8> expected{0x48,0x83,0xec,0x28,0x49,0x83,0x20,0x00};
     if(read<std::array<BYTE,8>>(tab.module_base+native_rva("get_browser"))!=expected)throw Error(3,"Live browser getter changed or is hooked");
-    using Get=HRESULT(WINAPI*)(void*,REFIID,void**);ComPtr<IShellBrowser> browser;
-    if(FAILED(reinterpret_cast<Get>(tab.module_base+native_rva("get_browser"))(reinterpret_cast<void*>(object),IID_PPV_ARGS(&browser)))||!browser)throw Error(3,"Native browser interface unavailable");
+    const auto browser=tab_shell_browser(tab);
+    if(!browser)throw Error(3,"Native browser interface unavailable");
     auto iface=reinterpret_cast<uintptr_t>(browser.Get());auto offset=native_field("browser_interface");
     if(iface<offset||read<uintptr_t>(iface)!=tab.module_base+native_rva("browser_interface")||read<uintptr_t>(iface-offset)!=tab.module_base+native_rva("browser_vtable"))throw Error(3,"Live navigation object identity mismatch");
     return iface-offset;

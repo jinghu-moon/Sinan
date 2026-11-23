@@ -153,6 +153,59 @@ std::string selection_fingerprint(std::vector<std::wstring> paths) {
     for(const auto& path:paths)values.push_back(utf8(path));
     return compat::sha256(values.dump());
 }
+std::vector<std::wstring> selected_names(IShellView& view) {
+    DWORD count{};
+    const auto items=shell_selection(view,count);
+    std::vector<std::wstring> names;
+    names.reserve(count);
+    for(DWORD index=0;index<count;++index) {
+        ComPtr<IShellItem> item;
+        if(FAILED(items->GetItemAt(index,&item)))throw Error(3,"Explorer selection is unavailable");
+        PWSTR raw=nullptr;
+        const auto filesystem=SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH,&raw));
+        std::unique_ptr<wchar_t,decltype(&CoTaskMemFree)> name(raw,CoTaskMemFree);
+        if(filesystem&&name)names.push_back(fs::path(name.get()).filename().wstring());
+        else {
+            raw=nullptr;
+            if(FAILED(item->GetDisplayName(SIGDN_NORMALDISPLAY,&raw))||!raw)
+                throw Error(3,"Explorer item name is unavailable");
+            name.reset(raw);
+            names.emplace_back(name.get());
+        }
+    }
+    return names;
+}
+bool matches_selection_rule(IShellView& view, const Json& rule) {
+    DWORD count{};
+    const auto items=shell_selection(view,count);
+    const auto quantity=rule.value("count",std::string("any"));
+    if(quantity=="none"&&count!=0)return false;
+    if(quantity=="one"&&count!=1)return false;
+    if(quantity=="multiple"&&count<2)return false;
+    const auto kind=rule.value("kind",std::string("any"));
+    const auto extensions=rule.value("extensions",std::vector<std::string>{});
+    if(kind=="any"&&extensions.empty())return true;
+    if(!count)return false;
+    for(DWORD index=0;index<count;++index) {
+        ComPtr<IShellItem> item;
+        SFGAOF attributes{};
+        if(FAILED(items->GetItemAt(index,&item))||FAILED(item->GetAttributes(SFGAO_FOLDER,&attributes)))return false;
+        const bool folder=(attributes&SFGAO_FOLDER)!=0;
+        if((kind=="files"&&folder)||(kind=="folders"&&!folder))return false;
+        if(extensions.empty())continue;
+        if(folder)return false;
+        PWSTR raw=nullptr;
+        const auto result=item->GetDisplayName(SIGDN_FILESYSPATH,&raw);
+        std::unique_ptr<wchar_t,decltype(&CoTaskMemFree)> path(raw,CoTaskMemFree);
+        if(FAILED(result)||!path)return false;
+        auto extension=utf8(fs::path(path.get()).extension().wstring());
+        std::transform(extension.begin(),extension.end(),extension.begin(),[](char ch){
+            return ch>='A'&&ch<='Z'?static_cast<char>(ch+('a'-'A')):ch;
+        });
+        if(std::find(extensions.begin(),extensions.end(),extension)==extensions.end())return false;
+    }
+    return true;
+}
 bool transfer_paths(const std::vector<std::wstring>& paths,const std::wstring& directory,bool move,HWND owner) {
     if(paths.empty())throw Error(2,"No selected files or folders");
     const auto target=directory_key(directory);
@@ -187,16 +240,15 @@ bool transfer_paths(const std::vector<std::wstring>& paths,const std::wstring& d
     return !aborted;
 }
 namespace {
-Json copy_selection(IShellView& view) {
-    const auto paths=selected_paths(view);
-    if(paths.empty())throw Error(3,"Select at least one filesystem item in Explorer");
+Json copy_items(const std::vector<std::wstring>& items) {
+    if(items.empty())throw Error(3,"Select at least one item in Explorer");
     std::wstring text;
-    for(const auto& path:paths) {
+    for(const auto& item:items) {
         if(!text.empty())text+=L"\r\n";
-        text+=path;
+        text+=item;
     }
     copy_text(text);
-    return {{"copied",true},{"count",paths.size()}};
+    return {{"copied",true},{"count",items.size()}};
 }
 }
 Json run_powershell_action(const fs::path& script, IShellView* view) {
@@ -270,6 +322,11 @@ Json toggle_file_extensions() {
     SHChangeNotify(SHCNE_ASSOCCHANGED, SHCNF_IDLIST, nullptr, nullptr);
     return {{"show_extensions",show}};
 }
+bool file_extensions_visible() {
+    SHELLFLAGSTATE state{};
+    SHGetSettings(&state,SSF_SHOWEXTENSIONS);
+    return state.fShowExtensions;
+}
 std::wstring clipboard_path() {
     std::wstring path;
     {
@@ -309,13 +366,27 @@ Json create_named_folder(const std::wstring& parent, const std::wstring& name) {
     return {{"created",true},{"path",utf8(path.wstring())}};
 }
 Json run_shell_view_action(IShellView& view, HWND frame, std::string_view action, const Json& parameters) {
-    if(action=="explorer.copy_selection")return copy_selection(view);
+    if(action=="explorer.copy_selection")return copy_items(selected_paths(view));
+    if(action=="explorer.copy_names")return copy_items(selected_names(view));
+    if(action=="explorer.copy_path") {
+        auto paths=selected_paths(view);
+        if(!paths.empty())return copy_items(paths);
+        action="explorer.copy_directory";
+    }
     auto path=view_path(view);
     if(action=="explorer.search_everything")
         return search_everything(path,wide(parameters.at("query").get<std::string>()));
     if(action=="explorer.copy_directory") {
         copy_text(path);
         return {{"copied",true},{"path",utf8(path)}};
+    }
+    if(action=="explorer.open_terminal_smart") {
+        const auto selected=selected_paths(view);
+        if(selected.size()==1) {
+            const auto attributes=GetFileAttributesW(selected.front().c_str());
+            if(attributes!=INVALID_FILE_ATTRIBUTES&&(attributes&FILE_ATTRIBUTE_DIRECTORY))path=selected.front();
+        }
+        action="explorer.open_terminal";
     }
     if(action=="explorer.open_terminal") {
         open_terminal(path,frame);

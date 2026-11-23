@@ -48,6 +48,8 @@ int run_observer_agent(const fs::path& root,bool from_login) {
     std::map<std::pair<DWORD,DWORD>,NativeTab> command_bar_targets;
     Json command_bar_state={{"state","disabled"}};
     Json command_bar_actions=Json::array();
+    const auto command_bar_message=RegisterWindowMessageW(command_bar_wake_message);
+    const auto agent_thread=GetCurrentThreadId();
     TabFeatures features;
     ExplorerShortcuts shortcuts;
     FolderClickListener folder_click;
@@ -235,7 +237,8 @@ int run_observer_agent(const fs::path& root,bool from_login) {
             if(enabled)command_bar_targets[key]=tab;
             try {
                 auto report=send_layout_payload(tab,enabled?LayoutAction::command_bar_enable:LayoutAction::command_bar_disable,{},
-                    {{"settings",command_bar_json(config.command_bar)},{"chinese",chinese_ui()},{"filesystem_tabs",filesystem_tabs}});
+                    {{"settings",command_bar_json(config.command_bar)},{"chinese",chinese_ui()},
+                     {"filesystem_tabs",filesystem_tabs},{"agent_thread",agent_thread}});
                 if(report.value("pending",false)||(enabled&&report.at("bars").empty()))++pending;
                 else {
                     ++applied;
@@ -306,7 +309,7 @@ int run_observer_agent(const fs::path& root,bool from_login) {
         } catch (const std::exception& e) { config_error = e.what(); }
     };
     scan();
-    if(active || config.folder_sizes.enabled)synchronize();
+    if(active || config.folder_sizes.enabled || config.command_bar.enabled)synchronize();
     else {
         update_shortcuts();
         update_tray();
@@ -499,6 +502,13 @@ int run_observer_agent(const fs::path& root,bool from_login) {
         } else if(requested&&!opened.value("pending",false))open_with_shell();
         else job.location="unconfirmed";
     };
+    auto require_selection=[&](const std::string& action,HWND frame,HWND child,bool active_tab) {
+        const auto rule=config.command_bar.conditions.find(action);
+        if(rule==config.command_bar.conditions.end())return;
+        auto view=enumerator.view(frame,child,active_tab);
+        if(!matches_selection_rule(*view.Get(),*rule))
+            throw Error(2,chinese_ui()?"当前选区不符合命令要求。":"The selection does not meet the command conditions.");
+    };
     auto run_directory_open=[&](const std::string& id,HWND foreground,const Json* binding=nullptr)->Json {
         try {
             reload();
@@ -507,6 +517,7 @@ int run_observer_agent(const fs::path& root,bool from_login) {
             auto entry=std::find_if(entries.begin(),entries.end(),[&](const auto& e){return e.id==id&&e.enabled;});
             if(entry==entries.end())throw Error(2,"Directory entry is missing or disabled");
             if(binding&&*binding!=entry_json(*entry))throw Error(2,"Directory binding changed before the shortcut was handled");
+            require_selection("entry."+id,foreground,nullptr,true);
             auto result=open_path(entry->path,foreground);
             result["entry_id"]=id;
             return last_directory_open=std::move(result);
@@ -620,8 +631,10 @@ int run_observer_agent(const fs::path& root,bool from_login) {
         try {
             Json result;
             if(action=="explorer.toggle_file_extensions") {
+                require_selection(action,foreground,exact_child,true);
                 result=toggle_file_extensions();
             }else if(action=="explorer.locate_clipboard") {
+                require_selection(action,foreground,exact_child,true);
                 auto path=clipboard_path();
                 auto attributes=workspace_path_attributes(path);
                 if(!attributes||*attributes==INVALID_FILE_ATTRIBUTES)
@@ -634,7 +647,10 @@ int run_observer_agent(const fs::path& root,bool from_login) {
                 const bool new_file=action=="explorer.new_file";
                 const bool transfer=action=="explorer.transfer_selection";
                 const bool extract=action=="explorer.extract_archive";
-                if(!reopening&&!merging&&!parent_tab&&!new_file&&!transfer&&!extract&&action!="explorer.open_terminal"&&action!="explorer.copy_directory"&&action!="explorer.copy_selection"&&action!="explorer.new_folder"&&action!="explorer.search_everything")
+                if(!reopening&&!merging&&!parent_tab&&!new_file&&!transfer&&!extract&&
+                    action!="explorer.open_terminal"&&action!="explorer.open_terminal_smart"&&
+                    action!="explorer.copy_directory"&&action!="explorer.copy_selection"&&action!="explorer.copy_names"&&
+                    action!="explorer.copy_path"&&action!="explorer.new_folder"&&action!="explorer.search_everything")
                     throw Error(2,"Unknown Explorer action");
                 HWND frame=foreground, child=exact_child;
                 const bool explicit_tab=request.contains("tab_id");
@@ -648,6 +664,7 @@ int run_observer_agent(const fs::path& root,bool from_login) {
                 if(!reopening&&(!child||interactive)) {
                     if(!frame||frame!=GetForegroundWindow())throw Error(3,"Bring Explorer to the foreground or supply a tab_id");
                 }
+                require_selection(action,frame,child,!explicit_tab);
                 if(reopening)result=reopen(foreground,explicit_tab?frame:nullptr);
                 else if(merging)result=merge_duplicates(frame,exact_child);
                 else if(parent_tab) {
@@ -734,6 +751,10 @@ int run_observer_agent(const fs::path& root,bool from_login) {
                 if(wcscmp(window_class,L"CabinetWClass")==0)view=enumerator.view(foreground,child,true);
                 else if(script->at("scope")=="explorer")throw Error(3,"Bring Explorer to the foreground or supply a tab_id");
             }
+            if(auto rule=config.command_bar.conditions.find(action);rule!=config.command_bar.conditions.end()) {
+                if(!view||!matches_selection_rule(*view.Get(),*rule))
+                    throw Error(2,chinese_ui()?"当前选区不符合命令要求。":"The selection does not meet the command conditions.");
+            }
             auto result=run_powershell_action(wide(script->at("path").get<std::string>()),view.Get());
             last_action={{"action",action},{"result",result}};
             return result;
@@ -741,6 +762,133 @@ int run_observer_agent(const fs::path& root,bool from_login) {
             last_action={{"action",action},{"error",ex.what()}};
             throw;
         }
+    };
+    struct CommandMenu {
+        HWND frame{},child{};
+        uint64_t generation{};
+        uint64_t selection_revision{};
+        TabLocation location;
+        std::string tab_id;
+        std::optional<std::string> paths;
+        std::optional<std::string> names;
+        Json rows=Json::array();
+        std::map<std::string,Json,std::less<>> commands;
+    };
+    std::optional<CommandMenu> open_command_menu;
+    auto read_command_menu=[&](HWND frame,HWND child,uint64_t generation) {
+        CommandMenu menu{frame,child,generation};
+        auto view=enumerator.view(frame,child,true);
+        if(FAILED(shell_view_location(*view.Get(),menu.location)))throw Error(5,"Explorer location is unavailable");
+        std::vector<std::wstring> paths,names;
+        try {
+            paths=selected_paths(*view.Get());
+            menu.paths=selection_fingerprint(paths);
+        } catch(const Error&) {}
+        try {
+            names=selected_names(*view.Get());
+            menu.names=selection_fingerprint(names);
+        } catch(const Error&) {}
+        Json flags=Json::object();
+        const auto tabs=features.list(tracker,config);
+        bool native=false;
+        for(const auto& tab:tabs) {
+            if(!tab.at("observed").get<bool>()||tab.at("window")!=reinterpret_cast<uintptr_t>(frame)||
+                tab.at("browser_window")!=reinterpret_cast<uintptr_t>(child))continue;
+            menu.tab_id=tab.at("tab_id").get<std::string>();
+            flags=tab.at("behavior");
+            native=tab.at("native_guid").is_string();
+            break;
+        }
+        const bool chinese=chinese_ui();
+        const bool filesystem=menu.location.filesystem_path.has_value();
+        const auto title=[&](const char* zh,const char* en){return std::string(chinese?zh:en);};
+        const auto row=[&](Json& items,std::string id,std::string label,bool enabled=true,Json parameters=Json::object()) {
+            if(auto rule=config.command_bar.conditions.find(id);rule!=config.command_bar.conditions.end()) {
+                try {enabled=enabled&&matches_selection_rule(*view.Get(),*rule);}
+                catch(const Error&) {enabled=false;}
+                parameters["hide"]=!enabled&&rule->value("hide",false);
+                parameters["rule"]=*rule;
+                parameters["paths"]=true;
+                parameters["names"]=true;
+            }
+            items.push_back({{"action",id},{"label",std::move(label)},{"enabled",enabled}});
+            if(parameters.value("hide",false))items.back()["hidden"]=true;
+            if(parameters.contains("checked"))items.back()["checked"]=parameters.at("checked");
+            if(enabled)menu.commands.emplace(std::move(id),std::move(parameters));
+        };
+        const auto group=[&](std::string label,Json items) {
+            menu.rows.push_back({{"label",std::move(label)},{"enabled",!items.empty()},{"children",std::move(items)}});
+        };
+        Json items=Json::array();
+        row(items,"explorer.reopen_closed_tab",title("重开刚关闭的标签","Reopen closed tab"),!tracker.closed_tabs().empty());
+        row(items,"explorer.open_parent_tab",title("在新标签打开父目录","Open parent in new tab"),
+            native&&filesystem&&directory_parent(*menu.location.filesystem_path).has_value());
+        const auto toggle=[&](const char* action,const char* flag,const char* on_zh,const char* off_zh,
+                              const char* on_en,const char* off_en) {
+            const auto checked=flags.value(flag,false);
+            row(items,action,checked?title(off_zh,off_en):title(on_zh,on_en),active&&native,
+                {{"checked",checked}});
+        };
+        toggle("tabs.pin","pinned","固定标签","取消固定","Pin tab","Unpin tab");
+        toggle("tabs.protect","protected","独立关闭保护","取消保护","Protect tab","Remove protection");
+        toggle("tabs.lock","locked","锁定目录","解锁目录","Lock directory","Unlock directory");
+        row(items,"explorer.merge_duplicate_tabs",title("合并重复标签","Merge duplicate tabs"),native);
+        group(title("标签","Tabs"),std::exchange(items,Json::array()));
+
+        row(items,"explorer.new_file",title("新建文件","New file"),filesystem&&has_panel());
+        row(items,"explorer.new_folder",title("新建文件夹","New folder"),filesystem);
+        auto transfer=title("发送到标签","Send to tab");
+        if(paths.size()>1)transfer=chinese?"发送 "+std::to_string(paths.size())+" 项到标签":
+            "Send "+std::to_string(paths.size())+" items to tab";
+        row(items,"explorer.transfer_selection",std::move(transfer),filesystem&&!paths.empty()&&has_panel(),{{"paths",true}});
+        bool archive=false;
+        try { archive_source(paths); archive=true; } catch(const Error&) {}
+        auto extract=title("解压并定位","Extract and locate");
+        if(archive&&paths.size()==1) {
+            const auto file=utf8(fs::path(paths.front()).filename().wstring());
+            extract=chinese?"解压 "+file+" 并定位":"Extract and locate "+file;
+        }
+        row(items,"explorer.extract_archive",std::move(extract),archive,{{"paths",true}});
+        row(items,"explorer.copy_selection",title("复制选中项路径","Copy selected item paths"),!paths.empty(),{{"paths",true}});
+        row(items,"explorer.copy_directory",title("复制当前目录路径","Copy current directory path"),filesystem);
+        row(items,"explorer.copy_names",title("复制选中项名称","Copy selected item names"),!names.empty(),
+            {{"names",true},{"paths",true}});
+        row(items,"explorer.locate_clipboard",title("从剪贴板定位","Locate from clipboard"));
+        group(title("文件操作","File operations"),std::exchange(items,Json::array()));
+
+        for(const auto& entry:entries_from_json(config.features.at("directories").at("entries"))) {
+            if(!entry.enabled)continue;
+            row(items,"entry."+entry.id,utf8(entry.name),true,{{"entry",entry_json(entry)}});
+        }
+        for(const auto& script:config.features.at("scripts").at("entries"))
+            row(items,"script."+script.at("id").get<std::string>(),script.at("name").get<std::string>(),filesystem,
+                {{"script",script},{"paths",true}});
+        group(title("目录与脚本","Directories and scripts"),std::exchange(items,Json::array()));
+
+        const auto processes=search_state.at("processes");
+        DWORD pid{};
+        GetWindowThreadProcessId(frame,&pid);
+        const bool search=config.everything_search&&std::any_of(processes.begin(),processes.end(),[&](const auto& process) {
+            return process.value("pid",DWORD{})==pid&&process.value("active",false);
+        });
+        Json scope=Json::array();
+        row(scope,"scope.current",title("当前文件夹","Current folder"),search,{{"checked",!config.everything_search_all_drives}});
+        row(scope,"scope.all",title("全盘","All drives"),search,{{"checked",config.everything_search_all_drives}});
+        items.push_back({{"label",title("Everything 搜索范围","Everything search scope")},{"enabled",search},{"children",std::move(scope)}});
+        row(items,"explorer.toggle_file_extensions",title("显示文件扩展名","Show file extensions"),true,
+            {{"checked",file_extensions_visible()}});
+        group(title("搜索与视图","Search and view"),std::move(items));
+        return menu;
+    };
+    auto command_target=[&](HWND frame)->NativeTab {
+        DWORD pid{};
+        const auto thread=GetWindowThreadProcessId(frame,&pid);
+        const auto target=command_bar_targets.find({pid,thread});
+        if(target==command_bar_targets.end())
+            throw Error(5,"Explorer command bar window is no longer registered");
+        auto native=target->second;
+        native.window=frame;
+        return native;
     };
     auto handler = [&](const Json& request) -> Json {
         auto command = request.at("command").get<std::string>();
@@ -977,7 +1125,15 @@ int run_observer_agent(const fs::path& root,bool from_login) {
         if(startup_restore_pending&&(served||GetTickCount64()-startup_started>=2000)&&!stopping){startup_restore_pending=false;active=true;try{automatic_restore=handler({{"command","workspace.restore"}});}catch(const std::exception& ex){automatic_restore={{"error",ex.what()}};}synchronize();}
         // Pump STA messages for COM callbacks without stealing focus or navigating Explorer.
         MSG message{};
-        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) { TranslateMessage(&message); DispatchMessageW(&message); }
+        std::set<HWND> command_bar_ready;
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+            if(!message.hwnd&&message.message==command_bar_message) {
+                command_bar_ready.insert(reinterpret_cast<HWND>(message.wParam));
+                continue;
+            }
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
         if(auto action=tray.take())run_tray_action(*action);
         if(stopping)break;
         selection_summary.poll(enumerator);
@@ -1109,12 +1265,88 @@ int run_observer_agent(const fs::path& root,bool from_login) {
             }catch(const std::exception& ex){notifications.show(config.features.at("notifications").at("mode"),ex.what(),target,true);}
         }
         if (!stopping && GetTickCount64() - last_scan >= scan_interval_ms) { reload(); scan(); confirm_reopen(); synchronize(); }
+        for(const auto frame:command_bar_ready)try {
+            if(!config.command_bar.enabled||GetForegroundWindow()!=frame)continue;
+            auto report=send_layout_payload(command_target(frame),LayoutAction::command_bar_events,{},{});
+            for(auto& event:report.at("actions"))
+                if(command_bar_actions.size()<64)command_bar_actions.push_back(std::move(event));
+        }catch(const std::exception&) {}
         for(const auto& event:std::exchange(command_bar_actions,Json::array()))try {
             auto frame=reinterpret_cast<HWND>(event.at("window").get<uint64_t>());
             auto child=reinterpret_cast<HWND>(event.at("child").get<uint64_t>());
-            if(!child||GetForegroundWindow()!=frame||!IsWindowVisible(child))continue;
-            run_action({{"command","explorer.open_terminal"}},frame,child);
-        }catch(const std::exception& error){notifications.show(config.features.at("notifications").at("mode"),error.what(),"",true);}
+            if(!config.command_bar.enabled||!child||GetForegroundWindow()!=frame||!IsWindowVisible(child))continue;
+            const auto action=event.value("action",std::string("explorer.open_terminal"));
+            if(action=="explorer.open_terminal") {
+                if(config.command_bar.terminal)run_action({{"command",action}},frame,child);
+                continue;
+            }
+            const auto generation=event.at("generation").get<uint64_t>();
+            reload();
+            if(!config_error.empty())throw Error(5,config_error);
+            if(!config.command_bar.enabled)continue;
+            if(action=="menu") {
+                scan();
+                auto menu=read_command_menu(frame,child,generation);
+                menu.selection_revision=selection_summary.selection_revision(frame);
+                send_layout_payload(command_target(frame),LayoutAction::command_bar_menu,{},
+                    {{"generation",generation},{"child",reinterpret_cast<uintptr_t>(child)},{"rows",menu.rows}});
+                open_command_menu=std::move(menu);
+                continue;
+            }
+            if(!open_command_menu||open_command_menu->frame!=frame||open_command_menu->child!=child||
+                open_command_menu->generation!=generation)throw Error(5,"Open the Sinan menu again");
+            auto previous=std::exchange(open_command_menu,std::nullopt);
+            const auto current=read_command_menu(frame,child,generation);
+            const auto command=previous->commands.find(action);
+            const auto current_command=current.commands.find(action);
+            if(command==previous->commands.end()||current_command==current.commands.end()||command->second!=current_command->second||
+                current.tab_id!=previous->tab_id||current.location.filesystem_path!=previous->location.filesystem_path||
+                (command->second.value("paths",false)&&current.paths!=previous->paths)||
+                (command->second.value("names",false)&&current.names!=previous->names))
+                throw Error(5,chinese_ui()?"标签、选区或命令已变更，请重新打开司南菜单。":
+                    "The tab, selection or command changed. Open the Sinan menu again.");
+            if(action.starts_with("tabs.")) {
+                auto result=handler({{"command",action},{"runtime_id",runtime_id},{"tab_id",current.tab_id},
+                    {"enabled",!command->second.at("checked").get<bool>()}});
+                last_action={{"action",action},{"result",std::move(result)}};
+            } else if(action.starts_with("entry.")) {
+                auto result=run_directory_open(action.substr(6),frame,&command->second.at("entry"));
+                last_action={{"action",action},{"result",std::move(result)}};
+            } else if(action.starts_with("script.")) {
+                run_script(action.substr(7),frame,child,Json::object());
+            } else if(action.starts_with("scope.")) {
+                const auto all_drives=action=="scope.all";
+                config=store.update([&](Config& c){c.everything_search_all_drives=all_drives;});
+                synchronize_search(config.everything_search);
+                last_action={{"action",action},{"result",{{"all_drives",all_drives}}}};
+            } else if(action=="explorer.reopen_closed_tab") {
+                auto result=reopen(frame,frame);
+                last_action={{"action",action},{"result",std::move(result)}};
+            } else {
+                run_action({{"command",action}},frame,child);
+            }
+        }catch(const std::exception& error){
+            last_action={{"action",event.value("action",std::string("command-bar"))},{"error",error.what()}};
+            notifications.show(config.features.at("notifications").at("mode"),error.what(),"",true);
+        }
+        if(open_command_menu)try {
+            const auto& previous=*open_command_menu;
+            const auto revision=selection_summary.selection_revision(previous.frame);
+            if(!config.command_bar.enabled||GetForegroundWindow()!=previous.frame||!IsWindowVisible(previous.child)) {
+                open_command_menu.reset();
+            } else if(revision!=previous.selection_revision) {
+                auto current=read_command_menu(previous.frame,previous.child,previous.generation);
+                current.selection_revision=revision;
+                const bool changed_tab=current.tab_id!=previous.tab_id||
+                    current.location.filesystem_path!=previous.location.filesystem_path;
+                Json request={{"generation",previous.generation},{"child",reinterpret_cast<uintptr_t>(previous.child)},
+                    {"refresh",true},{"close",changed_tab}};
+                if(!changed_tab&&current.rows!=previous.rows)request["rows"]=current.rows;
+                const auto report=send_layout_payload(command_target(previous.frame),LayoutAction::command_bar_menu,{},request);
+                if(report.value("open",false))open_command_menu=std::move(current);
+                else open_command_menu.reset();
+            }
+        }catch(const std::exception&) {open_command_menu.reset();}
     }
     return 0;
 }

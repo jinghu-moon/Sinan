@@ -32,6 +32,12 @@ try{
  legacy.at("shortcuts").erase("new_file");
  expect(!config_from_json(legacy).everything_search,"existing config leaves Everything gesture disabled");
  expect(config_from_json(legacy).features.at("shortcuts").at("new_file")=="","existing config leaves the new file shortcut unbound");
+ const Json selection_rule={{"count","multiple"},{"kind","files"},{"extensions",Json::array({".PNG",".jpg"})},{"hide",true}};
+ const auto command_bar=command_bar_from_json({{"conditions",{{"explorer.copy_names",selection_rule}}}});
+ expect(command_bar.conditions.at("explorer.copy_names").at("extensions")==Json::array({".png",".jpg"}),
+     "Command bar matches extensions case insensitively");
+ expect(command_bar_from_json(command_bar_json(command_bar))==command_bar,"Command bar selection rule round trip");
+ rejects([]{command_bar_from_json({{"conditions",{{"explorer.copy_names",{{"count","unknown"}}}}}});});
  auto listed=call({{"action","actions.list"},{"query","固定"}}).at("result");
  expect(listed.at("count").get<int>()>0,"Chinese action discovery");
  expect(!fs::exists(root),"Action discovery does not create state");
@@ -110,9 +116,14 @@ try{
  expect(saved==read_file(root/L"sinan.toml"),"Oversized style rejected without mutation");
  auto via_action=call({{"action","actions.execute"},{"id","preview"},{"parameters",{{"path","D:\\A\\B"},{"depth","1"}}}});
  expect(via_action.at("result").at("title")=="B","Catalog executes shared application operation");
- for(auto id:{"directories.open","explorer.open_terminal","explorer.copy_directory","explorer.copy_selection","explorer.locate_clipboard","explorer.new_folder","explorer.new_file",
-     "explorer.reopen_closed_tab","explorer.merge_duplicate_tabs","explorer.open_parent_tab","explorer.toggle_file_extensions","explorer.search_everything"})
-     expect(call({{"action","actions.list"},{"query",id}}).at("result").at("count")==1,"First batch is discoverable");
+ for(auto id:{"directories.open","explorer.open_terminal","explorer.open_terminal_smart","explorer.copy_directory",
+     "explorer.copy_selection","explorer.copy_names","explorer.copy_path","explorer.locate_clipboard","explorer.new_folder",
+     "explorer.new_file","explorer.reopen_closed_tab","explorer.merge_duplicate_tabs","explorer.open_parent_tab",
+     "explorer.toggle_file_extensions","explorer.search_everything"}) {
+     const auto matches=call({{"action","actions.list"},{"query",id}}).at("result").at("actions");
+     expect(std::any_of(matches.begin(),matches.end(),[&](const auto& row){return row.at("id")==id;}),
+         "Explorer action is discoverable by ID");
+ }
  auto create=[&](const char* name){return call({{"action","actions.execute"},{"id","explorer.new_folder"},
      {"parameters",{{"parent",utf8(root.wstring())},{"name",name}}}});};
  auto folder=create("新建 项目");
