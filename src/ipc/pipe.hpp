@@ -15,6 +15,6 @@ class PipeServer {
 public:
     explicit PipeServer(const fs::path& root);
     ~PipeServer();
-    bool poll(const std::function<Json(const Json&)>& handler, DWORD wait_ms = 100);
+    bool poll(const std::function<Json(const Json&)>& handler, DWORD wait_ms = 100, HANDLE message_wake = nullptr);
 };
 }

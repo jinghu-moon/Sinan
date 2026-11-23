@@ -22,7 +22,7 @@ int main(int argc,char** argv) {
             action=current=="inspect"?LayoutAction::inspect:current=="restore"?LayoutAction::restore:LayoutAction::apply;
             Json samples=Json::array();
             for(int i=0;i<6;++i) {
-                samples.push_back(send_layout_request(*found->native,action,options));
+                samples.push_back(send_layout_request(*found->native,action,{options}));
                 if(i!=5)Sleep(300);
             }
             results.push_back({{"requested",current},{"samples",samples}});

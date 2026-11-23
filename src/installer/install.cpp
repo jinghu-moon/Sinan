@@ -5,7 +5,7 @@
 
 namespace sinan {
 namespace {
-constexpr const wchar_t* runtime_files[]={L"sinan.exe",L"sinan-agent.exe",L"sinan-login.exe",L"sinan-symbols.exe",L"sinan-hook.dll",L"sinan-layout.dll",L"sinan-features.dll",L"sinan-style.dll"};
+constexpr const wchar_t* runtime_files[]={L"sinan.exe",L"sinan-agent.exe",L"sinan-login.exe",L"sinan-symbols.exe",L"sinan-hook.dll",L"sinan-layout.dll",L"sinan-features.dll",L"sinan-style.dll",L"sinan-panel.exe",L"sinan-folder-sizes.exe",L"sinan-folder-view.dll"};
 Json load_state(const fs::path& root) {
     auto p = root / L"install-state.json";
     if (!fs::exists(p)) return {{"schema_version", 1}, {"path_owned", false}};
@@ -48,14 +48,20 @@ Json install(const fs::path& root) {
     FileLock lock(root / L"install.lock");
     auto source = executable_path().parent_path()/L"sinan.exe";
     auto dest = root / L"bin" / L"sinan.exe";
-    for(auto name:runtime_files)if(!fs::is_regular_file(source.parent_path()/name))throw Error(1,"Distribution is missing "+utf8(name));
+    // The GUI prototype is optional; CLI-only packages keep the same install path.
+    std::vector<const wchar_t*> files;
+    for(auto name:runtime_files){
+        if(std::wstring_view(name)==L"sinan-panel.exe"&&!fs::is_regular_file(source.parent_path()/name))continue;
+        if(!fs::is_regular_file(source.parent_path()/name))throw Error(1,"Distribution is missing "+utf8(name));
+        files.push_back(name);
+    }
     fs::create_directories(dest.parent_path());
     if(!fs::equivalent(source.parent_path(),dest.parent_path())){
         // Validate every file before copying any file; never overwrite a loaded adapter.
-        for(auto name:runtime_files){auto from=source.parent_path()/name,to=dest.parent_path()/name;
+        for(auto name:files){auto from=source.parent_path()/name,to=dest.parent_path()/name;
             if(fs::exists(to)&&read_file(from)!=read_file(to))throw Error(1,"Installed runtime differs; uninstall the prior distribution first");
         }
-        for(auto name:runtime_files)if(!fs::exists(dest.parent_path()/name))fs::copy_file(source.parent_path()/name,dest.parent_path()/name);
+        for(auto name:files)if(!fs::exists(dest.parent_path()/name))fs::copy_file(source.parent_path()/name,dest.parent_path()/name);
     }
     // CPack places README and licenses next to bin/. A build-tree install may have neither.
     auto package = source.parent_path().filename() == L"bin" ? source.parent_path().parent_path() : source.parent_path();
@@ -73,14 +79,15 @@ Json install(const fs::path& root) {
         }
     }
     if(!fs::equivalent(package,root))for(auto relative:{L"docs/evidence/01-native-probe.json",L"docs/evidence/02-tab-icon-fix.json",L"docs/evidence/02-tab-icon-user-confirmed.png",L"docs/research/02-shelltabs-tab-icons.md",L"assets/icons/pin-rounded.svg",L"assets/icons/lock-rounded.svg",L"tools/update-agent.ps1",
-        L"docs/evidence/04-symbol-resolution.json",L"docs/evidence/05-symbol-compatibility.json",L"docs/research/03-explorertabutility-compatibility.md",L"docs/research/04-explorerpatcher-symbol-compatibility.md",
-        L"docs/06-sinan-refactor-tdd.md",L"docs/testing-sinan.md",L"docs/evidence/07-sinan-refactor.json",L"docs/history/tabtail-v0.11.md"}) {
+        L"docs/evidence/04-symbol-resolution.json",L"docs/evidence/05-symbol-compatibility.json",L"docs/research/03-explorertabutility-compatibility.md",L"docs/research/04-explorerpatcher-symbol-compatibility.md",L"assets/icons/folder-teal-reference.svg",
+        L"docs/07-search-panel-prototype.md",L"docs/06-sinan-refactor-tdd.md",L"docs/testing-sinan.md",L"docs/evidence/07-sinan-refactor.json",L"docs/history/tabtail-v0.11.md"}) {
         auto from=package/relative,to=root/relative;if(fs::is_regular_file(from)){fs::create_directories(to.parent_path());fs::copy_file(from,to,fs::copy_options::overwrite_existing);}
     }
     ConfigStore store(root);
     if (!fs::exists(store.path())) store.update([](Config&) {});
     else store.load();
-    if(store.load().features.at("restore").at("automatic").get<bool>())manage_restore_startup(root,true,dest);
+    const auto config=store.load();
+    if(config.autostart||config.features.at("restore").at("automatic").get<bool>())sync_login_startup(root,dest);
     auto state = load_state(root); state["version"] = SINAN_VERSION; state["installed"] = true; save_state(root, state);
     auto result = manage_path_locked(root, true);
     result["installed"] = true; result["executable"] = utf8(dest.wstring());
@@ -91,18 +98,18 @@ Json uninstall(const fs::path& root, bool purge) {
     FileLock lock(root / L"install.lock");
     stop_observer_agent(root);
     auto result = manage_path_locked(root, false);
-    manage_restore_startup(root,false); // Removes only the exact command recorded as ours.
+    remove_login_startup(root);
     std::vector<std::string> pending;
     std::error_code ec;
     for (auto name : runtime_files) {
         auto file = root / L"bin" / name; ec.clear();
         if (fs::exists(file) && !fs::remove(file, ec)) pending.push_back(utf8(file.wstring()));
     }
-    for (const auto& file : {L"README.md", L"LICENSE",L"THIRD_PARTY.md",L"docs/06-sinan-refactor-tdd.md",L"docs/testing-sinan.md",L"docs/evidence/07-sinan-refactor.json",L"docs/history/tabtail-v0.11.md", L"docs\\design.md", L"docs\\implementation.md", L"docs\\testing-v0.5.md", L"docs\\tab-width.md",L"docs\\01-tab-protection-and-appearance.md",L"docs\\testing-tab-features.md",
-        L"docs/evidence/01-native-probe.json",L"assets/icons/pin-rounded.svg",L"assets/icons/lock-rounded.svg",L"tools/update-agent.ps1",
+    for (const auto& file : {L"README.md", L"LICENSE",L"THIRD_PARTY.md",L"docs/07-search-panel-prototype.md",L"docs/06-sinan-refactor-tdd.md",L"docs/testing-sinan.md",L"docs/evidence/07-sinan-refactor.json",L"docs/history/tabtail-v0.11.md", L"docs\\design.md", L"docs\\implementation.md", L"docs\\testing-v0.5.md", L"docs\\tab-width.md",L"docs\\01-tab-protection-and-appearance.md",L"docs\\testing-tab-features.md",
+        L"docs/evidence/01-native-probe.json",L"assets/icons/pin-rounded.svg",L"assets/icons/lock-rounded.svg",L"assets/icons/folder-teal-reference.svg",L"tools/update-agent.ps1",
         L"docs/evidence/02-tab-icon-fix.json",L"docs/evidence/02-tab-icon-user-confirmed.png",L"docs/research/02-shelltabs-tab-icons.md",
         L"docs/05-symbol-compatibility.md",L"docs/testing-v0.10.0.md",L"docs/evidence/04-symbol-resolution.json",L"docs/evidence/05-symbol-compatibility.json",L"docs/research/03-explorertabutility-compatibility.md",L"docs/research/04-explorerpatcher-symbol-compatibility.md",
-        L"licenses\\CLI11-LICENSE", L"licenses\\tomlplusplus-LICENSE", L"licenses\\json-LICENSE", L"licenses\\MinHook-LICENSE", L"licenses\\FTXUI-LICENSE"}) {
+        L"licenses\\CLI11-LICENSE", L"licenses\\tomlplusplus-LICENSE", L"licenses\\json-LICENSE", L"licenses\\MinHook-LICENSE", L"licenses\\FTXUI-LICENSE", L"licenses\\Everything-SDK3-LICENSE"}) {
         ec.clear(); auto p = root / file;
         fs::remove(p, ec);
         if (ec) pending.push_back(utf8(p.wstring()));

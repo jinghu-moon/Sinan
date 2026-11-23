@@ -1,10 +1,13 @@
 #pragma once
 #include "tui/theme.hpp"
 #include <ftxui/component/component_options.hpp>
+#include <ftxui/component/captured_mouse.hpp>
 #include <ftxui/component/component.hpp>
 #include <ftxui/component/event.hpp>
 #include <ftxui/dom/node.hpp>
+#include <ftxui/screen/screen.hpp>
 #include <algorithm>
+#include <optional>
 
 namespace sinan {
 // Unlike a single-row menu, choices wrap as whole items in small terminals.
@@ -78,6 +81,129 @@ inline ftxui::CheckboxOption form_checkbox_options() {
     };
     return options;
 }
+
+class FormScroll : private ftxui::ComponentBase {
+public:
+    ftxui::Element View(ftxui::Element body) {
+        return ftxui::flex(std::make_shared<Viewport>(std::move(body),*this));
+    }
+    void Reset() {
+        offset_=0;
+        last_focus_.reset();
+        ReleaseDrag();
+        bounds_={0,-1,0,-1};
+    }
+    void RevealFocus(){last_focus_.reset();}
+    void ReleaseDrag(){drag_.reset();}
+    bool OnPageKey(const ftxui::Event& event) {
+        if(event==ftxui::Event::PageUp)Scroll(-page_rows_);
+        else if(event==ftxui::Event::PageDown)Scroll(page_rows_);
+        else return false;
+        return true;
+    }
+    bool OnMouse(ftxui::Event event) {
+        using ftxui::Mouse;
+        const auto& mouse=event.mouse();
+        if(drag_) {
+            if(mouse.motion==Mouse::Released||mouse.button==Mouse::None)drag_.reset();
+            else if(mouse.motion==Mouse::Moved&&mouse.button==Mouse::Left&&Travel()>0) {
+                const int thumb=std::clamp(mouse.y-bounds_.y_min-grab_,0,Travel());
+                offset_=(thumb*max_offset_+Travel()/2)/Travel();
+            }
+            return true;
+        }
+        if(!bounds_.Contain(mouse.x,mouse.y))return false;
+        if(mouse.button==Mouse::WheelUp||mouse.button==Mouse::WheelDown) {
+            Scroll(mouse.button==Mouse::WheelUp?-3:3);
+            return true;
+        }
+        if(!max_offset_||mouse.x!=bounds_.x_max||mouse.button!=Mouse::Left||mouse.motion!=Mouse::Pressed)
+            return false;
+        const int row=mouse.y-bounds_.y_min;
+        const int thumb=ThumbStart();
+        if(row>=thumb&&row<thumb+thumb_rows_) {
+            drag_=CaptureMouse(event);
+            if(!drag_)return false;
+            grab_=row-thumb;
+        }else Scroll(row<thumb?-page_rows_:page_rows_);
+        return true;
+    }
+private:
+    class Viewport : public ftxui::Node {
+    public:
+        Viewport(ftxui::Element body,FormScroll& scroll):Node({std::move(body)}),scroll_(scroll){}
+        void ComputeRequirement() override {
+            Node::ComputeRequirement();
+            ++requirement_.min_x;
+        }
+        void SetBox(ftxui::Box box) override {
+            Node::SetBox(box);
+            const auto& child=children_.front()->requirement();
+            focus_=child.focused.enabled?std::optional(child.focused.box):std::nullopt;
+            scroll_.Layout(box,child.min_y,focus_);
+            --box.x_max;
+            box.y_min-=scroll_.layout_offset_;
+            box.y_max=box.y_min+std::max(child.min_y,scroll_.page_rows_)-1;
+            children_.front()->SetBox(box);
+        }
+        void Render(ftxui::Screen& screen) override {
+            scroll_.CommitLayout(focus_);
+            const auto previous=screen.stencil;
+            auto body=box_;
+            --body.x_max;
+            screen.stencil=ftxui::Box::Intersection(previous,body);
+            Node::Render(screen);
+            if(requirement_.focused.enabled) {
+                auto cursor=screen.cursor();
+                if(cursor.shape!=ftxui::Screen::Cursor::Hidden&&!screen.stencil.Contain(cursor.x,cursor.y))
+                    screen.SetCursor({screen.dimx()-1,screen.dimy()-1,ftxui::Screen::Cursor::Hidden});
+            }
+            screen.stencil=previous;
+            if(!scroll_.max_offset_)return;
+            const int thumb=box_.y_min+scroll_.ThumbStart();
+            const auto track=ftxui::Box::Intersection(previous,{box_.x_max,box_.x_max,box_.y_min,box_.y_max});
+            for(int y=track.y_min;y<=track.y_max&&!track.IsEmpty();++y) {
+                const bool inside=y>=thumb&&y<thumb+scroll_.thumb_rows_;
+                auto& cell=screen.CellAt(track.x_min,y);
+                cell.character=inside?"┃":"│";
+                cell.foreground_color=inside?(scroll_.drag_?nord::yellow:nord::cyan):nord::selection;
+            }
+        }
+    private:
+        FormScroll& scroll_;
+        std::optional<ftxui::Box> focus_;
+    };
+    void Layout(ftxui::Box box,int rows,std::optional<ftxui::Box> focus) {
+        bounds_=box;
+        page_rows_=std::max(1,box.y_max-box.y_min+1);
+        max_offset_=std::max(0,rows-page_rows_);
+        thumb_rows_=max_offset_?std::max(1,page_rows_*page_rows_/rows):page_rows_;
+        layout_offset_=offset_;
+        if(focus&&(focus!=last_focus_||page_rows_!=last_page_rows_)) {
+            const int leading_rows=std::min(2,std::max(0,page_rows_-(focus->y_max-focus->y_min+1)));
+            if(focus->y_min<offset_)layout_offset_=focus->y_min-leading_rows;
+            else if(focus->y_max>=offset_+page_rows_)
+                layout_offset_=std::min(focus->y_min,focus->y_max-page_rows_+1);
+        }
+        layout_offset_=std::clamp(layout_offset_,0,max_offset_);
+    }
+    void CommitLayout(std::optional<ftxui::Box> focus) {
+        // FTXUI measures again once wrapped elements know their width.
+        // Persist only the offset and focus from the last layout pass.
+        offset_=layout_offset_;
+        last_focus_=focus;
+        last_page_rows_=page_rows_;
+        if(!max_offset_)drag_.reset();
+    }
+    void Scroll(int rows){offset_=std::clamp(offset_+rows,0,max_offset_);}
+    int Travel()const{return page_rows_-thumb_rows_;}
+    int ThumbStart()const{return max_offset_?(offset_*Travel()+max_offset_/2)/max_offset_:0;}
+
+    ftxui::Box bounds_{0,-1,0,-1};
+    std::optional<ftxui::Box> last_focus_;
+    ftxui::CapturedMouse drag_;
+    int offset_=0,layout_offset_=0,max_offset_=0,page_rows_=1,last_page_rows_=0,thumb_rows_=1,grab_=0;
+};
 
 // A focusable read-only document, with its own viewport so the dialog footer
 // stays on screen even when a diagnostic response contains hundreds of lines.

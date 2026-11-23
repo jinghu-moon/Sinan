@@ -1,5 +1,6 @@
 """Use actual Explorer COM observations without navigation, injection, or title writes."""
 import concurrent.futures
+import ctypes
 import json
 from pathlib import Path
 import subprocess
@@ -18,9 +19,11 @@ with tempfile.TemporaryDirectory(prefix="Sinan-agent-") as temporary:
 
     try:
         call("tabs", "list", code=3)
+        call("tabs", "list", "--query", "src", code=3)
         start = call("agent", "start")
         assert start["mode"] == "observe" and isinstance(start["hook_available"], bool)
         assert start["shortcuts"]["hook_active"] is False, "observation must not install a global keyboard hook"
+        assert start["tray"]["registered"] is False
         assert call("agent", "start")["pid"] == start["pid"], "start must be idempotent"
         old_runtime = start["runtime_id"]
         with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
@@ -28,6 +31,12 @@ with tempfile.TemporaryDirectory(prefix="Sinan-agent-") as temporary:
         assert all(s["runtime_id"] == old_runtime for s in statuses)
         result = call("tabs", "list")
         assert "tabs" in result and result["runtime_applied"] is False
+        missing = "sinan-search-no-match-8afd5fd35f6b"
+        filtered = call("tabs", "list", "--query", missing)
+        assert filtered["tabs"] == [] and filtered["match_count"] == 0
+        assert all(key in filtered for key in ("scan_complete", "warnings", "tab_count"))
+        action = call("actions", "run", "tabs.list", "--parameters", json.dumps({"query": missing}))
+        assert action["tabs"] == [] and action["match_count"] == 0
         tabs = result["tabs"]
         target = None
         if result["scan_complete"] and tabs:
@@ -57,8 +66,23 @@ with tempfile.TemporaryDirectory(prefix="Sinan-agent-") as temporary:
         call("agent", "stop")
         new = call("agent", "start")
         assert new["runtime_id"] != old_runtime
+        call("tabs", "locate", old_runtime + ".1", code=2)
         if target:
             call("tabs", "set", target, "--depth", "2", code=2)
+        user32 = ctypes.windll.user32
+        user32.FindWindowW.restype = ctypes.c_void_p
+        if user32.FindWindowW("Shell_TrayWnd", None):
+            assert call("tray", "on")["registered"]
+            tray = call("tray", "status")
+            assert tray["enabled"] and tray["registered"] and tray["running"]
+            assert call("tray", "off")["registered"] is False
+            assert call("agent", "status")["pid"] == new["pid"]
+        call("agent", "stop")
+        assert call("tray", "status")["enabled"] is False
+        assert call("tray", "on")["saved"]
+        tray = call("tray", "status")
+        assert tray["enabled"] and not tray["registered"] and not tray["running"]
+        assert call("startup", "status")["enabled"] is False
         print(f"Agent integration passed; {len(tabs)} real tabs observed, none modified.")
     finally:
         call("agent", "stop")

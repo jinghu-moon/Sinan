@@ -1,5 +1,6 @@
 #include "config/tab_features.hpp"
 #include "policy/rules.hpp"
+#include "policy/entries.hpp"
 #include "config/config.hpp"
 #include <algorithm>
 #include <cmath>
@@ -66,12 +67,78 @@ Shortcut parse_shortcut(std::string_view chord) {
         throw Error(2,"Shortcut conflicts with a reserved Explorer/system command");
     out.modifiers|=MOD_NOREPEAT;return out;
 }
+std::string_view shell_shortcut_action(std::string_view key) {
+    if(key=="open_terminal")return "explorer.open_terminal";
+    if(key=="copy_directory")return "explorer.copy_directory";
+    if(key=="copy_selection")return "explorer.copy_selection";
+    if(key=="locate_clipboard"||key=="locate_clipboard_global")return "explorer.locate_clipboard";
+    if(key=="new_folder")return "explorer.new_folder";
+    if(key=="new_file")return "explorer.new_file";
+    if(key=="transfer_selection")return "explorer.transfer_selection";
+    if(key=="extract_archive")return "explorer.extract_archive";
+    if(key=="reopen_closed_tab")return "explorer.reopen_closed_tab";
+    if(key=="merge_duplicate_tabs")return "explorer.merge_duplicate_tabs";
+    if(key=="open_parent_tab")return "explorer.open_parent_tab";
+    if(key=="toggle_file_extensions")return "explorer.toggle_file_extensions";
+    return {};
+}
+void validate_folder_name(std::wstring_view name) {
+    if(name.empty()||name.size()>255||name.back()==L'.'||name.back()==L' '||
+        name.find_first_of(L"<>:\"/\\|?*")!=name.npos||
+        std::any_of(name.begin(),name.end(),[](wchar_t c){return c<32;}))
+        throw Error(2,"Expected one valid Windows folder name");
+    auto stem=std::wstring(name.substr(0,name.find(L'.')));
+    while(!stem.empty()&&stem.back()==L' ')stem.pop_back();
+    if(!stem.empty())CharUpperBuffW(stem.data(),static_cast<DWORD>(stem.size()));
+    if(stem==L"CON"||stem==L"PRN"||stem==L"AUX"||stem==L"NUL"||stem==L"CONIN$"||stem==L"CONOUT$"||
+        (stem.size()==4&&(stem.starts_with(L"COM")||stem.starts_with(L"LPT"))&&
+            std::wstring_view(L"123456789¹²³").find(stem.back())!=std::wstring_view::npos))
+        throw Error(2,"Windows reserves this folder name");
+}
 FeatureJson default_features() {
-    return {{"directories",{{"entries",J::array()}}},{"shortcuts",{{"toggle_pin",""},{"toggle_protection",""},{"toggle_directory_lock",""}}},
+    J shortcuts{{"new_folder_name",""}};
+    for(auto key:explorer_shortcut_keys)shortcuts[key]="";
+    return {{"directories",{{"entries",J::array()}}},{"scripts",{{"entries",J::array()}}},{"shortcuts",std::move(shortcuts)},
+        {"archives",{{"tools",J::array()},{"default_tool",""},{"formats",J::object()},{"recycle",false}}},
         {"notifications",{{"mode","all"}}},{"tab_behavior",{{"pinned_tabs_protect_close",true},{"locked_navigation","new_tab"},{"pinned_position","keep"}}},
         {"tab_style",{{"default",J::object()},{"pinned",{{"enabled",true},{"icon",{{"source","builtin:pin-rounded"},{"color","#F59E0B"}}}}},
             {"protected",{{"enabled",true}}},{"locked",{{"enabled",true},{"icon",{{"source","builtin:lock-rounded"},{"color","#F59E0B"}}}}},
             {"rules",J::array()}}},{"restore",{{"automatic",false},{"max_tabs",20}}}};
+}
+std::string archive_extension(std::string value) {
+    std::transform(value.begin(),value.end(),value.begin(),[](unsigned char c){return static_cast<char>(std::tolower(c));});
+    if(!value.starts_with('.'))value.insert(value.begin(),'.');
+    if(value.size()<2||value.size()>32||value.ends_with('.')||value.find("..")!=value.npos||
+        value.find_first_not_of(".abcdefghijklmnopqrstuvwxyz0123456789")!=value.npos)
+        throw Error(2,"Invalid archive extension");
+    return value;
+}
+static void validate_archives(const J& archives) {
+    keys(archives,{"tools","default_tool","formats","recycle"});
+    const auto& tools=archives.at("tools");
+    const auto& formats=archives.at("formats");
+    if(!tools.is_array()||!formats.is_object())throw Error(2,"Invalid archive tools or format rules");
+    std::set<std::string> ids;
+    for(const auto& tool:tools) {
+        keys(tool,{"id","name","type","path"});
+        const auto id=tool.at("id").get<std::string>();
+        const auto name=tool.at("name").get<std::string>();
+        const auto type=tool.at("type").get<std::string>();
+        const auto path=wide(tool.at("path").get<std::string>());
+        if(id.empty()||id.size()>64||id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-_")!=id.npos||
+           !ids.insert(id).second||name.empty()||name.size()>256)
+            throw Error(2,"Invalid or duplicate archive tool ID or name");
+        if(type!="7zip"&&type!="rar"&&type!="tar")throw Error(2,"Unknown archive tool type");
+        try {directory_key(path);} catch(const PolicyError& error){throw Error(2,error.what());}
+        if(_wcsicmp(fs::path(path).extension().c_str(),L".exe")!=0)throw Error(2,"Archive tool requires an absolute .exe path");
+    }
+    const auto fallback=archives.at("default_tool").get<std::string>();
+    if(!fallback.empty()&&!ids.contains(fallback))throw Error(2,"Default archive tool does not exist");
+    std::set<std::string> extensions;
+    for(const auto& [extension,tool]:formats.items())
+        if(!extensions.insert(archive_extension(extension)).second||!ids.contains(tool.get<std::string>()))
+            throw Error(2,"Duplicate archive extension or unknown archive tool");
+    archives.at("recycle").get<bool>();
 }
 void validate_style(const J& s,bool fonts) {
     try {
@@ -105,18 +172,43 @@ void validate_style(const J& s,bool fonts) {
 }
 void validate_features(const J& j,bool fonts) {
     try {
-        keys(j,{"shortcuts","notifications","tab_behavior","tab_style","restore","directories"});
+        keys(j,{"shortcuts","notifications","tab_behavior","tab_style","restore","directories","scripts","archives"});
         auto defaults=default_features();
         for(auto it=defaults.begin();it!=defaults.end();++it)if(!j.contains(it.key()))throw Error(2,"Missing feature group: "+it.key());
+        validate_archives(j.at("archives"));
         for(auto group:{"shortcuts","notifications","tab_behavior","restore"}){if(!j.at(group).is_object())throw Error(2,"Expected feature table");for(auto it=defaults.at(group).begin();it!=defaults.at(group).end();++it)if(!j.at(group).contains(it.key()))throw Error(2,"Missing feature field: "+std::string(group)+"."+it.key());}
-        if(j.contains("shortcuts")) {
-            auto s=j.at("shortcuts");keys(s,{"toggle_pin","toggle_protection","toggle_directory_lock"});std::set<std::pair<UINT,UINT>> chords;
-            for(auto& v:s){auto c=parse_shortcut(v.get<std::string>());if(c.key&&!chords.insert({c.modifiers,c.key}).second)throw Error(2,"Duplicate shortcut");}
-        }
         keys(j.at("directories"),{"entries"});auto entries=entries_from_json(j.at("directories").at("entries"));
         std::set<std::pair<UINT,UINT>> all_chords;
-        for(auto& v:j.at("shortcuts")){auto c=parse_shortcut(v.get<std::string>());if(c.key)all_chords.insert({c.modifiers,c.key});}
+        const auto& shortcuts=j.at("shortcuts");
+        if(shortcuts.size()!=defaults.at("shortcuts").size())throw Error(2,"Unknown shortcut field");
+        const auto name=shortcuts.at("new_folder_name").get<std::string>();
+        if(!name.empty())validate_folder_name(wide(name));
+        for(auto key:explorer_shortcut_keys) {
+            auto chord=parse_shortcut(shortcuts.at(key).get<std::string>());
+            if(chord.key&&!all_chords.insert({chord.modifiers,chord.key}).second)throw Error(2,"Duplicate shortcut");
+        }
         for(auto& e:entries){auto c=parse_shortcut(e.shortcut);if(e.enabled&&c.key&&!all_chords.insert({c.modifiers,c.key}).second)throw Error(2,"Duplicate directory/Explorer shortcut: "+e.shortcut);}
+        keys(j.at("scripts"),{"entries"});
+        const auto& scripts=j.at("scripts").at("entries");
+        if(!scripts.is_array()||scripts.size()>128)throw Error(2,"Expected up to 128 PowerShell actions");
+        std::set<std::string> script_ids;
+        for(const auto& script:scripts) {
+            keys(script,{"id","name","path","scope","shortcut"});
+            const auto id=script.at("id").get<std::string>();
+            const auto script_name=script.at("name").get<std::string>();
+            const auto script_path=wide(script.at("path").get<std::string>());
+            const auto scope=script.at("scope").get<std::string>();
+            if(id.empty()||id.size()>64||id.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-_")!=id.npos||!script_ids.insert(id).second)
+                throw Error(2,"PowerShell action ID must be unique and use lowercase letters, digits, hyphens or underscores");
+            if(script_name.find_first_not_of(" \t")==script_name.npos||script_name.size()>256||
+                std::any_of(script_name.begin(),script_name.end(),[](unsigned char ch){return ch<32;}))
+                throw Error(2,"Invalid PowerShell action name");
+            try {directory_key(script_path);} catch(const PolicyError& ex){throw Error(2,ex.what());}
+            if(_wcsicmp(fs::path(script_path).extension().c_str(),L".ps1")!=0)throw Error(2,"PowerShell action requires an absolute .ps1 path");
+            if(scope!="explorer"&&scope!="global")throw Error(2,"Invalid PowerShell action scope");
+            const auto chord=parse_shortcut(script.at("shortcut").get<std::string>());
+            if(chord.key&&!all_chords.insert({chord.modifiers,chord.key}).second)throw Error(2,"Duplicate PowerShell shortcut: "+id);
+        }
         if(j.contains("notifications")) {
             auto n=j.at("notifications");keys(n,{"mode"});auto mode=n.value("mode",std::string("all"));
             if(mode!="all"&&mode!="errors"&&mode!="off")throw Error(2,"Notification mode must be all, errors or off");

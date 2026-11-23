@@ -21,6 +21,7 @@ struct DirectoryEntry {
     std::string shortcut;
     bool enabled=true, descendants=false;
     std::string title="alias_depth";
+    std::string scope="global";
     bool operator==(const DirectoryEntry&) const = default;
 };
 struct DisplayOptions {

@@ -37,7 +37,7 @@ Element table_row(const std::vector<std::string>& values,const std::vector<int>&
     Elements cells{text(selected?"> ":"  ")};
     for(size_t i=0;i<std::min(values.size(),widths.size());++i) {
         if(i)cells.push_back(text(" │ ")|color(nord::blue));
-        cells.push_back(text(fit_cell(values[i],widths[i],!header&&i==0))|size(WIDTH,EQUAL,widths[i]));
+        cells.push_back(text(fit_cell(values[i],widths[i],!header&&(i==0||widths.size()==3&&i==1)))|size(WIDTH,EQUAL,widths[i]));
     }
     return hbox(std::move(cells));
 }
@@ -85,7 +85,7 @@ class Worker {
             try {
                 result.response=application_action(root_,request);
                 if(request.at("action")=="snapshot") result.snapshot=result.response.at("result");
-                else {
+                else if(request.at("action")!="archives.jobs") {
                     try {result.snapshot=application_action(root_,{{"action","snapshot"}}).at("result");}
                     catch(const std::exception& error) {
                         result.response["code"]=5;
@@ -107,10 +107,12 @@ public:
 
 class Interface {
 public:
+    static constexpr int shortcuts_page_index=4;
+    static constexpr int directories_page_index=5;
     ScreenInteractive screen=ScreenInteractive::Fullscreen();
     Messages tr;
     Config config;
-    Json agent=Json::object(),tabs=Json::array();
+    Json agent=Json::object(),tabs=Json::array(),startup=Json::object();
     int page=0,selected_tab=0,selected_rule=0,language_choice=0,separator_choice=0,viewport_height=36,viewport_width=110;
     int modal_kind=0,tab_mode=0,match_mode=0,rule_action=0;
     int64_t edit_revision=1;
@@ -125,12 +127,24 @@ public:
     int selected_entry=0,entry_title_mode=2,dock_choice=0;
     bool entry_enabled=true,entry_descendants=false,entry_creating=true;
     std::string entry_id,entry_name,entry_path,entry_shortcut,editing_entry;
+    std::string entry_scope="global";
     Json entry_expected,dock_expected;
     std::vector<std::string> entry_labels,entry_title_labels,dock_labels;
     Component entry_menu,entry_editor;
+    static constexpr int script_shortcut_field=100;
+    int selected_script=0;
+    std::vector<std::string> script_labels;
+    std::string script_id,script_name,script_path,script_scope,script_chord,editing_script;
+    Json scripts_expected;
+    Json archive_expected, archive_draft, archive_jobs=Json::array();
+    std::vector<std::string> archive_tools, archive_rules, archive_job_labels;
+    int archive_tool_row{}, archive_rule_row{}, archive_job_row{};
+    std::string archive_id, archive_name, archive_path, archive_type="7zip", archive_suffix, archive_rule_tool;
+    bool archive_recycle{};
+    Component script_menu,script_editor,script_chord_input,script_add_button;
     int feature_target=0,feature_category=0;
     std::vector<std::string> feature_targets{"Global / 全局","Pinned / 固定","Protected / 保护","Locked / 锁定","Current tab / 当前标签","Directory rule / 目录外观规则"};
-    std::vector<std::string> feature_categories{"Style / 样式","Shortcuts / 快捷键","Notifications / 通知","Restore / 恢复"};
+    std::vector<std::string> feature_categories;
     std::string feature_font="inherit",feature_color="inherit",feature_bold="inherit",feature_icon="inherit",feature_icon_color="inherit";
     std::string feature_text_state[6]{"inherit","inherit","inherit","inherit","inherit","inherit"};
     std::string feature_enabled="true";bool feature_rule_removed=false;
@@ -138,12 +152,22 @@ public:
     std::string feature_bg[6]{"inherit","inherit","inherit","inherit","inherit","inherit"};
     int batch_operation=1,batch_state=0;
     std::vector<std::string> batch_operations,batch_states;
+    int tools_group=0;
+    std::vector<std::string> tools_groups;
+    std::array<Component,4> tool_groups;
+    Component tools_selector,batch_choice;
     std::string feature_rule_id="appearance-rule",feature_rule_name="",feature_rule_patterns="D:\\Projects\\**",feature_rule_match="glob",feature_rule_enabled="true";
-    std::string feature_chord[3],feature_notification="all",feature_auto="false",feature_max="20",state_filter="all";
+    std::array<std::string,explorer_shortcut_keys.size()> shortcut_chords;
+    std::string folder_preset,shortcut_error,edited_chord,edited_folder_preset;
+    Json shortcut_expected,shortcut_registration_errors=Json::object();
+    int selected_shortcut=0;
+    std::vector<std::string> shortcut_labels;
+    std::vector<bool> shortcut_conflict_rows;
+    std::string feature_notification="all",feature_auto="false",feature_max="20",state_filter="all";
     Json feature_base,feature_original;bool feature_dirty=false;std::string feature_tab;
     Component feature_editor;
-    Component shortcut_inputs[4];
-    std::string editing_tab,editing_rule,notice_key="ready",detail,local_error;
+    Component shortcut_menu,shortcut_input,directory_chord_input,shortcut_actions,tab_more;
+    std::string editing_tab,editing_rule,more_tab_id,notice_key="ready",detail,local_error;
     Json test_result;
     bool diagnostic_result=false;
     std::vector<std::string> page_labels,tab_labels,rule_labels,language_labels{"自动 / Auto","简体中文","English"};
@@ -165,6 +189,7 @@ public:
         standard_data=_wcsicmp(fs::absolute(data_root).lexically_normal().c_str(),fs::absolute(data_directory()).lexically_normal().c_str())==0;
         default_depth=depth_text(config.depth);
         load_appearance();
+        load_shortcut_draft(config.features.at("shortcuts"));
         language_choice=language=="zh-CN"?1:language=="en"?2:0;
         for(int i=0;i<3;++i)if(wide(separators[i])==config.separator)separator_choice=i;
         relabel();build();rebuild_lists();
@@ -192,14 +217,15 @@ public:
     }
     void relabel() {
         feature_targets={tr["global_source"],tr["pinned_style"],tr["protected_style"],tr["locked_style"],tr["current_style"],tr["directory_style"]};
-        feature_categories={tr["style_category"],tr["shortcuts_category"],tr["notifications_category"],tr["restore_category"]};
-        page_labels={tr["tabs"],tr["rules"],tr["settings"],tr["tools"],tr["directories"]};
+        feature_categories={tr["style_category"],tr["notifications_category"],tr["restore_category"]};
+        page_labels={tr["tabs"],tr["rules"],tr["settings"],tr["tools"],tr["shortcuts_category"],tr["directories"]};
         entry_title_labels={tr["entry_title_off"],tr["entry_title_alias"],tr["entry_title_depth"]};
         dock_labels={tr["dock_keep"],tr["dock_left"],tr["dock_right"]};
         tab_modes={tr["inherit"],tr["depth_mode"],tr["full"]};match_modes={tr["glob"],tr["exact"]};rule_actions={tr["depth_mode"],tr["native"]};
         width_modes={tr["width_system"],tr["width_fixed"],tr["width_content"]};
         rule_match_labels={tr["form_glob_mode"],tr["exact"]};rule_action_labels={tr["depth_mode"],tr["form_native_title"]};
         batch_operations={tr["pinned_style"],tr["protected_style"],tr["locked_style"]};batch_states={tr["state_off"],tr["state_on"]};
+        tools_groups={tr["tools_common"],tr["tools_workspace_group"],tr["tools_archive_scripts"],tr["tools_diagnostics_maintenance"]};
         inspect_labels={tr["inspect_status"],tr["inspect_agent"],tr["inspect_config"],tr["inspect_styles"],tr["inspect_layout"],tr["inspect_capabilities"],tr["inspect_native"],tr["inspect_visual"]};
     }
     void load_appearance() {
@@ -239,21 +265,30 @@ public:
     void rebuild_lists() {
         entry_labels.clear();for(auto& e:config.features.at("directories").at("entries"))entry_labels.push_back(e.at("name").get<std::string>()+"  ["+e.at("id").get<std::string>()+"]");
         selected_entry=std::clamp(selected_entry,0,std::max(0,static_cast<int>(entry_labels.size())-1));
+        const auto script_label=has_script()?script_labels.at(selected_script):std::string{};
+        script_labels.clear();
+        for(const auto& script:config.features.at("scripts").at("entries"))
+            script_labels.push_back(script.at("id").get<std::string>()+"  ·  "+script.at("name").get<std::string>());
+        const auto previous_script=std::find(script_labels.begin(),script_labels.end(),script_label);
+        selected_script=previous_script==script_labels.end()?std::clamp(selected_script,0,std::max(0,static_cast<int>(script_labels.size())-1)):
+            static_cast<int>(previous_script-script_labels.begin());
         if(dock_expected.is_null()){auto side=config.features.at("tab_behavior").value("pinned_position",std::string("keep"));dock_choice=side=="left"?1:side=="right"?2:0;}
 
         auto current=current_tab();std::string id=current.is_null()?"":current.value("tab_id",std::string{});
         tab_labels.clear();tab_cells.clear();visible_ids.clear();
+        const TabSearch matches(search);
         for(const auto& t:tabs) {
-            auto path=t.at("path").is_string()?t.at("path").get<std::string>():t.value("original_title",std::string{});
-            if(!search.empty()&&path.find(search)==std::string::npos)continue;
+            if(!matches.matches(t))continue;
             auto behavior=t.value("behavior",Json::object());
             if(state_filter!="all"&&!behavior.value(state_filter,false))continue;
             std::string flags;flags+=behavior.value("pinned",false)?"P":"-";flags+=behavior.value("protected",false)?"G":"-";flags+=behavior.value("locked",false)?"L":"-";
 
             auto title=t.value("preview_title",std::string{});
             tab_labels.push_back(title);
+            const bool applied=t.value("title_applied",false);
             tab_cells.push_back({title,t.value("action",std::string{})=="native"?tr["native_short"]:t.at("depth").is_string()?t.at("depth").get<std::string>():t.at("depth").dump(),
-                source(t),flags+" "+tr[t.value("title_applied",false)?"applied":"pending"],std::to_string(t.value("window",uint64_t{}))});
+                source(t),flags+" "+tr[applied?"applied":"pending"],std::to_string(t.value("window",uint64_t{})),
+                t.at("path").is_string()?t.at("path").get<std::string>():"—",flags+(applied?"  ✓":"  ○")});
             visible_ids.push_back(t.at("tab_id").get<std::string>());
         }
         auto it=std::find(visible_ids.begin(),visible_ids.end(),id);
@@ -270,6 +305,10 @@ public:
     }
     std::vector<int> tab_widths() const {
         const int width=list_width(),source=width<110?14:22;
+        if(viewport_width<110) {
+            const int title=std::max(10,(width-22)/3);
+            return {title,std::max(1,width-22-title),12};
+        }
         if(width<90)return {std::max(1,width-3-2-9-5-source-11),5,source,11};
         return {std::max(1,width-3-2-12-5-source-11-10),5,source,11,10};
     }
@@ -293,24 +332,57 @@ public:
     std::function<void(const std::string&,const std::string&)> report_error;
     void receive_result(Completion result) {
         bool poll=result.request.value("action",std::string{})=="snapshot"&&!result.request.value("manual",false);
-        if(!poll)busy=false;
+        const auto action=result.request.value("action",std::string{});
+        const bool archive_poll=action=="archives.jobs"&&result.request.value("automatic",false);
+        const bool saving_shortcuts=result.request.value("action",std::string{})=="features.save"&&
+            result.request.value("group",std::string{})=="shortcuts";
+        if(!poll&&!archive_poll)busy=false;
         if(!result.snapshot.is_null()) {
             auto before=current_tab();std::string id=before.is_null()?"":before.value("tab_id",std::string{});
             std::string selected_id=selected_rule>=0&&selected_rule<static_cast<int>(config.rules.size())?config.rules[selected_rule].id:"";
             auto next_config=config_from_json(result.snapshot.at("config"));auto next_agent=result.snapshot.at("agent");auto next_tabs=next_agent.value("tabs",Json::array());
             if(!next_agent.is_object()||!next_tabs.is_array())throw Error(2,"Invalid agent snapshot");
             config=std::move(next_config);agent=std::move(next_agent);tabs=std::move(next_tabs);
+            startup=result.snapshot.value("startup",Json::object());
             if(!display_revision) {
                 default_depth=depth_text(config.depth);
                 for(int i=0;i<3;++i)if(wide(separators[i])==config.separator)separator_choice=i;
             }
             if(!appearance_revision)load_appearance();
+            if(!saving_shortcuts&&shortcut_draft()==shortcut_expected)
+                load_shortcut_draft(config.features.at("shortcuts"));
             if(!language_override&&language!=config.language){language=config.language;tr.set_language(language);relabel();}
             rebuild_lists();
             for(size_t i=0;i<visible_ids.size();++i)if(visible_ids[i]==id)selected_tab=static_cast<int>(i);
+            if(show_modal&&modal_kind==13&&(visible_ids.empty()||visible_ids[selected_tab]!=more_tab_id))close_tab_more();
             for(size_t i=0;i<config.rules.size();++i)if(config.rules[i].id==selected_id)selected_rule=static_cast<int>(i);
         }
-        if(!result.error.empty()) {notice_key="failed";detail=tr["failed"]+" ("+std::to_string(result.error_code)+"): "+result.error;if(show_modal)local_error=detail;return;}
+        if(poll&&show_modal&&modal_kind==12&&!busy&&submit)submit({{"action","archives.jobs"},{"automatic",true}});
+        if(archive_poll&&(!show_modal||modal_kind!=12||!result.error.empty()))return;
+        if(!result.error.empty()) {notice_key="failed";detail=tr["failed"]+" ("+std::to_string(result.error_code)+"): "+result.error;if(saving_shortcuts)shortcut_error=detail;else if(show_modal)local_error=detail;return;}
+        if(action=="archives.jobs"&&result.response.value("code",0)==0) {
+            const auto selected=selected_archive_job().value("id",std::string{});
+            archive_jobs=result.response.at("result").at("jobs");
+            archive_job_labels.clear();
+            for(size_t i=0;i<archive_jobs.size();++i) {
+                const auto& job=archive_jobs[i];
+                const auto name=utf8(fs::path(wide(job.at("source").get<std::string>())).filename().wstring());
+                auto label=tr["archive_"+job.at("state").get<std::string>()];
+                if(job.contains("progress_percent"))label+=" "+std::to_string(job.at("progress_percent").get<int>())+"%";
+                archive_job_labels.push_back(std::move(label)+"  "+name);
+                if(job.at("id")==selected)archive_job_row=static_cast<int>(i);
+            }
+            archive_job_row=std::clamp(archive_job_row,0,std::max(0,static_cast<int>(archive_jobs.size())-1));
+            if(!archive_poll) {
+                local_error.clear();
+                notice_key="success";
+            }
+            return;
+        }
+        if((action=="archives.cancel"||action=="archives.open")&&result.response.value("code",0)==0&&show_modal&&modal_kind==12) {
+            request({{"action","archives.jobs"}});
+            return;
+        }
         if(poll&&notice_key=="width_pending") {
             auto layout=agent.value("layout",Json::object());
             if(layout.value("complete",false)&&(config.tabs.width_mode=="system"||layout.value("layout_applied",false))) {
@@ -321,6 +393,15 @@ public:
             auto code=result.response.value("code",0);notice_key=code==0?"success":code==5?"partial":"failed";
             if(code!=0&&result.response.at("result").value("conflict",std::string{})=="appearance") {
                 notice_key="width_conflict";detail=tr["width_conflict_help"];
+            }
+            else if(result.request.at("action")=="tabs.locate"||result.request.at("action")=="directories.open")
+                detail=result.response.at("result").value("message",std::string{});
+            else if(action=="startup.set")
+                detail=result.response.at("result").value("message",std::string{});
+            else if(action=="tray.set"){
+                const auto& tray=result.response.at("result");
+                if(tray.value("restart_required",false))detail=tr["tray_restart"];
+                else detail=tray.value("error",tray.value("message",std::string{}));
             }
             else if(code!=0) detail=result.response.at("result").dump(2);
             if(result.request.value("action",std::string{})=="style.read"&&code==0){
@@ -338,10 +419,24 @@ public:
                 reload_appearance();
                 if(code==5)notice_key="width_pending";
             }
-            if(result.request.value("action",std::string{})=="features.save") {
+            if(saving_shortcuts) {
+                const auto& outcome=result.response.at("result");
+                if(outcome.value("saved",false)) {
+                    const auto& saved=result.request.at("value");
+                    if(shortcut_draft()==saved)
+                        load_shortcut_draft(result.snapshot.is_null()?saved:config.features.at("shortcuts"));
+                    else shortcut_expected=saved;
+                    shortcut_error=code==0?"":outcome.value("message",outcome.dump(2));
+                    shortcut_registration_errors=outcome.value("shortcut_registration",Json::object()).value("errors",Json::object());
+                    if(!shortcut_registration_errors.empty())shortcut_error=tr["shortcut_occupied"];
+                }else shortcut_error=tr["feature_conflict"];
+                detail.clear();
+            }else if(result.request.value("action",std::string{})=="features.save") {
                 if(result.response.at("result").value("saved",false)){
                     if(result.request.value("group",std::string{})=="directories"&&modal_kind==7)show_modal=false;
                     if(result.request.value("group",std::string{})=="tab_behavior")dock_expected=nullptr;
+                    if(result.request.value("group",std::string{})=="scripts"&&modal_kind==10)open_scripts();
+                    if(result.request.value("group",std::string{})=="archives"&&modal_kind==11)open_archive_settings();
                 }
                 if(result.response.at("result").value("saved",false)) {
                     auto key=result.request.value("draft_key",std::string{});
@@ -364,11 +459,16 @@ public:
         entry_expected=config.features.at("directories");entry_creating=create;
         Json e=create?Json{{"id",""},{"name",""},{"path",""}}:entries.at(selected_entry);
         entry_id=e.at("id");editing_entry=entry_id;entry_name=e.at("name");entry_path=e.at("path");entry_shortcut=e.value("shortcut",std::string{});
+        entry_scope=e.value("scope",std::string("global"));
         entry_enabled=e.value("enabled",true);entry_descendants=e.value("descendants",false);auto title=e.value("title",std::string("alias_depth"));entry_title_mode=title=="off"?0:title=="alias"?1:2;
         if(create){auto t=current_tab();if(!t.is_null()&&t.at("path").is_string())entry_path=t.at("path");}
         local_error.clear();modal_kind=7;show_modal=true;entry_editor->ChildAt(0)->TakeFocus();
     }
-    Json entry_draft()const {return {{"id",entry_id},{"name",entry_name},{"path",entry_path},{"shortcut",entry_shortcut},{"enabled",entry_enabled},{"descendants",entry_descendants},{"title",entry_title_mode==0?"off":entry_title_mode==1?"alias":"alias_depth"}};}
+    Json entry_draft()const {
+        Json entry{{"id",entry_id},{"name",entry_name},{"path",entry_path},{"shortcut",entry_shortcut},{"enabled",entry_enabled},{"descendants",entry_descendants},{"title",entry_title_mode==0?"off":entry_title_mode==1?"alias":"alias_depth"}};
+        if(entry_scope!="global")entry["scope"]=entry_scope;
+        return entry;
+    }
     void apply_entry() {
         try {auto value=entry_expected;auto& rows=value["entries"];auto it=std::find_if(rows.begin(),rows.end(),[this](auto& e){return e.at("id")==entry_id;});
             if(entry_creating&&it!=rows.end())throw Error(2,tr["entry_duplicate"]);
@@ -382,31 +482,232 @@ public:
         auto value=config.features.at("directories");if(value.at("entries").empty())return;value["entries"].erase(value["entries"].begin()+selected_entry);
         open_confirmation({{"action","features.save"},{"group","directories"},{"expected",config.features.at("directories")},{"value",value}});
     }
+    bool has_script() const {
+        return selected_script>=0&&selected_script<static_cast<int>(script_labels.size());
+    }
+    const Json& current_script() const {
+        return config.features.at("scripts").at("entries").at(selected_script);
+    }
+    void open_scripts() {
+        if(busy)return;
+        local_error.clear();modal_kind=9;show_modal=true;
+        (has_script()?script_menu:script_add_button)->TakeFocus();
+    }
+    Json selected_archive_job() const {
+        return archive_job_row>=0&&static_cast<size_t>(archive_job_row)<archive_jobs.size()?
+            archive_jobs.at(archive_job_row):Json::object();
+    }
+    void rebuild_archive_rows() {
+        archive_tools.clear();
+        archive_rules.clear();
+        for(const auto& tool:archive_draft.at("tools")) {
+            std::error_code error;
+            const auto exists=fs::is_regular_file(wide(tool.at("path").get<std::string>()),error);
+            const auto id=tool.at("id").get<std::string>();
+            archive_tools.push_back(id+"  "+tool.at("name").get<std::string>()+"  "+tr[exists?"archive_available":"archive_missing"]+
+                (archive_draft.at("default_tool")==id?"  "+tr["archive_default"]:""));
+        }
+        for(const auto& [extension,tool]:archive_draft.at("formats").items())
+            archive_rules.push_back(extension+"  →  "+tool.get<std::string>());
+        archive_tool_row=std::clamp(archive_tool_row,0,std::max(0,static_cast<int>(archive_tools.size())-1));
+        archive_rule_row=std::clamp(archive_rule_row,0,std::max(0,static_cast<int>(archive_rules.size())-1));
+    }
+    void open_archive_settings() {
+        archive_draft=archive_expected=config.features.at("archives");
+        archive_recycle=archive_draft.at("recycle").get<bool>();
+        archive_id.clear();archive_name.clear();archive_path.clear();
+        archive_suffix.clear();archive_rule_tool.clear();archive_type="7zip";
+        show_modal=true;modal_kind=11;local_error.clear();
+        rebuild_archive_rows();
+    }
+    void edit_archive_tool() {
+        if(archive_tools.empty())return;
+        const auto& tool=archive_draft.at("tools").at(archive_tool_row);
+        archive_id=tool.at("id").get<std::string>();
+        archive_name=tool.at("name").get<std::string>();
+        archive_path=tool.at("path").get<std::string>();
+        archive_type=tool.at("type").get<std::string>();
+    }
+    void save_archive_tool() {
+        if(archive_id.empty()) {local_error=tr["archive_id_required"];return;}
+        auto desired=archive_draft;
+        auto& tools=desired.at("tools");
+        auto found=std::find_if(tools.begin(),tools.end(),[&](const auto& tool){return tool.at("id")==archive_id;});
+        const Json tool={{"id",archive_id},{"name",archive_name},{"path",archive_path},{"type",archive_type}};
+        if(found==tools.end())tools.push_back(tool);
+        else *found=tool;
+        try {
+            auto features=config.features;
+            features["archives"]=desired;
+            validate_features(features,false);
+            archive_draft=std::move(desired);
+            rebuild_archive_rows();
+            local_error.clear();
+        } catch(const std::exception& error) {local_error=error.what();}
+    }
+    void remove_archive_tool() {
+        if(archive_tools.empty())return;
+        auto& tools=archive_draft.at("tools");
+        const auto id=tools.at(archive_tool_row).at("id");
+        auto& formats=archive_draft.at("formats");
+        for(auto it=formats.begin();it!=formats.end();)if(it.value()==id)it=formats.erase(it);else ++it;
+        if(archive_draft.at("default_tool")==id)archive_draft["default_tool"]="";
+        tools.erase(archive_tool_row);
+        rebuild_archive_rows();
+    }
+    void edit_archive_rule(bool remove) {
+        auto& formats=archive_draft.at("formats");
+        if(formats.empty())return;
+        auto selected=std::next(formats.begin(),archive_rule_row);
+        if(remove) {formats.erase(selected);rebuild_archive_rows();return;}
+        archive_suffix=selected.key();
+        archive_rule_tool=selected.value().get<std::string>();
+    }
+    void save_archive_rule() {
+        try {
+            const auto& tools=archive_draft.at("tools");
+            if(std::none_of(tools.begin(),tools.end(),[&](const auto& item){return item.at("id")==archive_rule_tool;}))
+                throw Error(2,tr["archive_choose_tool"]);
+            archive_draft["formats"][archive_extension(archive_suffix)]=archive_rule_tool;
+            rebuild_archive_rows();
+            local_error.clear();
+        } catch(const std::exception& error) {local_error=error.what();}
+    }
+    void edit_script(bool create) {
+        if(busy||(!create&&!has_script()))return;
+        scripts_expected=config.features.at("scripts");
+        const auto script=create?Json::object():current_script();
+        editing_script=script_id=script.value("id",std::string{});
+        script_name=script.value("name",std::string{});
+        script_path=script.value("path",std::string{});
+        script_scope=script.value("scope",std::string("global"));
+        script_chord=script.value("shortcut",std::string{});
+        local_error.clear();modal_kind=10;show_modal=true;script_editor->ChildAt(0)->TakeFocus();
+    }
+    void save_script() {
+        try {
+            auto value=scripts_expected;
+            auto& entries=value.at("entries");
+            const auto existing=std::find_if(entries.begin(),entries.end(),[this](const auto& script){return script.at("id")==editing_script;});
+            Json script{{"id",script_id},{"name",script_name},{"path",script_path},{"scope",script_scope},{"shortcut",script_chord}};
+            if(existing==entries.end())entries.push_back(std::move(script));
+            else *existing=std::move(script);
+            auto features=config.features;
+            features["scripts"]=value;
+            validate_features(features);
+            request({{"action","features.save"},{"group","scripts"},{"expected",scripts_expected},{"value",value}});
+        }catch(const std::exception& error){local_error=error.what();}
+    }
+    void remove_script() {
+        if(!has_script())return;
+        auto value=config.features.at("scripts");
+        value.at("entries").erase(value.at("entries").begin()+selected_script);
+        open_confirmation({{"action","features.save"},{"group","scripts"},{"expected",config.features.at("scripts")},
+            {"value",value},{"context",current_script().at("path")}});
+    }
+    void run_script() {
+        if(!has_script())return;
+        Json parameters=Json::object();
+        auto tab=current_tab();
+        if(!tab.is_null()&&tab.value("observed",true)&&tab.at("path").is_string())parameters["tab_id"]=tab.at("tab_id");
+        request({{"action","actions.execute"},{"id","script."+current_script().at("id").get<std::string>()},
+            {"parameters",parameters},{"show_result",true}});
+    }
     int focused_shortcut()const {
-        if(!show_modal)return 0;
-        if(modal_kind==7&&shortcut_inputs[3]&&shortcut_inputs[3]->Focused())return 4;
-        if(modal_kind==6&&feature_category==1)for(int i=0;i<3;++i)if(shortcut_inputs[i]&&shortcut_inputs[i]->Focused())return i+1;
+        if(show_modal) {
+            if(modal_kind==14&&shortcut_input->Focused())return selected_shortcut<3?selected_shortcut+1:selected_shortcut+2;
+            if(modal_kind==10&&script_chord_input->Focused())return script_shortcut_field;
+            return modal_kind==7&&directory_chord_input->Focused()?4:0;
+        }
         return 0;
     }
     void capture_shortcut(const CapturedShortcut& captured) {
-        if(captured.field!=focused_shortcut()||busy)return;
+        if(!captured.field||captured.field!=focused_shortcut()||busy)return;
         try {
             parse_shortcut(captured.chord);
             if(captured.field==4)entry_shortcut=captured.chord;
-            else {feature_chord[captured.field-1]=captured.chord;feature_dirty=true;}
+            else if(captured.field==script_shortcut_field)script_chord=captured.chord;
+            else edited_chord=captured.chord;
             local_error.clear();
         }catch(const std::exception& ex){local_error=ex.what();}
     }
+    void load_shortcut_draft(const Json& value) {
+        shortcut_expected=value;
+        for(size_t i=0;i<shortcut_chords.size();++i)
+            shortcut_chords[i]=value.at(explorer_shortcut_keys[i]).get<std::string>();
+        folder_preset=value.at("new_folder_name").get<std::string>();
+    }
+    Json shortcut_draft() const {
+        auto value=shortcut_expected;
+        for(size_t i=0;i<shortcut_chords.size();++i)value[explorer_shortcut_keys[i]]=shortcut_chords[i];
+        value["new_folder_name"]=folder_preset;
+        return value;
+    }
+    std::vector<bool> shortcut_conflicts() const {
+        std::vector<bool> conflicts(shortcut_chords.size());
+        std::map<std::pair<UINT,UINT>,std::vector<size_t>> bindings;
+        for(size_t i=0;i<shortcut_chords.size();++i) {
+            const auto chord=parse_shortcut(shortcut_chords[i]);
+            if(chord.key)bindings[{chord.modifiers,chord.key}].push_back(i);
+        }
+        for(const auto& [key,rows]:bindings)if(rows.size()>1)
+            for(auto row:rows)conflicts[row]=true;
+        auto check=[&](const Json& value){
+            const auto chord=parse_shortcut(value.get<std::string>());
+            const auto it=bindings.find({chord.modifiers,chord.key});
+            if(it!=bindings.end())for(auto row:it->second)conflicts[row]=true;
+        };
+        for(const auto& entry:config.features.at("directories").at("entries"))
+            if(entry.value("enabled",true))check(entry.at("shortcut"));
+        for(const auto& script:config.features.at("scripts").at("entries"))check(script.at("shortcut"));
+        return conflicts;
+    }
+    void edit_shortcut() {
+        if(busy)return;
+        edited_chord=shortcut_chords.at(selected_shortcut);
+        edited_folder_preset=folder_preset;
+        local_error.clear();modal_kind=14;show_modal=true;shortcut_input->TakeFocus();
+    }
+    void stage_shortcut() {
+        try {
+            parse_shortcut(edited_chord);
+            if(std::string_view(explorer_shortcut_keys[selected_shortcut])=="new_folder") {
+                if(!edited_folder_preset.empty())validate_folder_name(wide(edited_folder_preset));
+                folder_preset=edited_folder_preset;
+            }
+            shortcut_chords[selected_shortcut]=edited_chord;
+            shortcut_error.clear();local_error.clear();show_modal=false;shortcut_menu->TakeFocus();
+        }catch(const std::exception& ex){local_error=ex.what();}
+    }
+    std::string shortcut_registration_error(size_t index) const {
+        const auto key=explorer_shortcut_keys[index];
+        if(shortcut_chords[index]!=config.features.at("shortcuts").at(key).get_ref<const std::string&>())return {};
+        const auto status=agent.value("shortcuts",Json::object());
+        const auto errors=status.value("errors",shortcut_registration_errors);
+        if(!errors.contains(key))return {};
+        const auto& error=errors.at(key);
+        return error.is_string()?error.get<std::string>():error.dump();
+    }
+    void apply_shortcuts() {
+        try {
+            auto value=shortcut_draft();
+            auto full=config.features;
+            full["shortcuts"]=value;
+            validate_features(full);
+            shortcut_error.clear();
+            request({{"action","features.save"},{"group","shortcuts"},{"expected",shortcut_expected},{"value",value}});
+        }catch(const std::exception& ex){shortcut_error=ex.what();}
+    }
     void apply_docking() {auto expected=dock_expected.is_null()?config.features.at("tab_behavior"):dock_expected;auto value=expected;value["pinned_position"]=dock_choice==1?"left":dock_choice==2?"right":"keep";request({{"action","features.save"},{"group","tab_behavior"},{"expected",expected},{"value",value}});}
-    std::string feature_group()const {return feature_category==0?"tab_style":feature_category==1?"shortcuts":feature_category==2?"notifications":"restore";}
+    std::string feature_group()const {return feature_category==0?"tab_style":feature_category==1?"notifications":"restore";}
     std::string feature_name()const {return feature_target==0?"default":feature_target==1?"pinned":feature_target==2?"protected":"locked";}
     std::string feature_key()const {return feature_group()+":"+std::to_string(feature_target)+(feature_target==4?":"+(current_tab().is_null()?std::string{}:current_tab().at("tab_id").get<std::string>()):feature_target==5?":"+feature_rule_id:"");}
     void keep_feature_draft() {
         if(!feature_dirty||feature_active_key.empty())return;
         Json raw{{"base",feature_base},{"expected",feature_expected},{"original",feature_original},{"font",feature_font},{"color",feature_color},{"bold",feature_bold},{"icon",feature_icon},{"icon_color",feature_icon_color},{"enabled",feature_enabled},{"tab",feature_tab},
           {"rule_id",feature_rule_id},{"rule_name",feature_rule_name},{"patterns",feature_rule_patterns},{"match",feature_rule_match},{"rule_enabled",feature_rule_enabled},{"sensitive",feature_rule_sensitive},{"removed",feature_rule_removed},
-          {"notification",feature_notification},{"automatic",feature_auto},{"max",feature_max},{"background",Json::array()},{"state_text",Json::array()},{"chords",Json::array()}};
-        for(auto& v:feature_bg)raw["background"].push_back(v);for(auto& v:feature_text_state)raw["state_text"].push_back(v);for(auto& v:feature_chord)raw["chords"].push_back(v);
+          {"notification",feature_notification},{"automatic",feature_auto},{"max",feature_max},{"background",Json::array()},{"state_text",Json::array()}};
+        for(auto& v:feature_bg)raw["background"].push_back(v);for(auto& v:feature_text_state)raw["state_text"].push_back(v);
         feature_drafts[feature_active_key]=raw;
     }
     void select_feature_draft() {
@@ -416,7 +717,8 @@ public:
         feature_rule_id=raw.at("rule_id");feature_rule_name=raw.at("rule_name");feature_rule_patterns=raw.at("patterns");feature_rule_match=raw.at("match");feature_rule_enabled=raw.at("rule_enabled");feature_rule_removed=raw.at("removed");
         feature_rule_sensitive=raw.value("sensitive",false);
         feature_notification=raw.at("notification");feature_auto=raw.at("automatic");feature_max=raw.at("max");
-        for(int i=0;i<6;++i){feature_bg[i]=raw.at("background")[i];feature_text_state[i]=raw.at("state_text")[i];}for(int i=0;i<3;++i)feature_chord[i]=raw.at("chords")[i];feature_dirty=true;
+        for(int i=0;i<6;++i){feature_bg[i]=raw.at("background")[i];feature_text_state[i]=raw.at("state_text")[i];}
+        feature_dirty=true;
     }
     void load_feature_draft() {
         feature_active_key=feature_key();feature_drafts.erase(feature_active_key);feature_rule_removed=false;
@@ -441,8 +743,7 @@ public:
             feature_icon=i.value("source",std::string("inherit"));feature_icon_color=i.value("color",std::string("inherit"));
             int index=0;for(auto theme:{"light","dark"})for(auto state:{"normal","hover","selected"})feature_bg[index++]=feature_original.value(theme,Json::object()).value("background",Json::object()).value(state,std::string("inherit"));
             index=0;for(auto theme:{"light","dark"})for(auto state:{"normal","hover","selected"})feature_text_state[index++]=feature_original.value(theme,Json::object()).value("text",Json::object()).value(state,std::string("inherit"));
-        }else if(feature_category==1){int i=0;for(auto key:{"toggle_pin","toggle_protection","toggle_directory_lock"})feature_chord[i++]=feature_base.at(key).get<std::string>();}
-        else if(feature_category==2)feature_notification=feature_base.at("mode");
+        }else if(feature_category==1)feature_notification=feature_base.at("mode");
         else {feature_auto=feature_base.at("automatic").get<bool>()?"true":"false";feature_max=feature_base.at("max_tabs").dump();}
     }
     Json feature_style_draft()const {
@@ -470,8 +771,7 @@ public:
                     Json rule{{"id",feature_rule_id},{"name",feature_rule_name.empty()?feature_rule_id:feature_rule_name},{"patterns",patterns},{"match",feature_rule_match},{"enabled",feature_rule_enabled=="true"},{"case_sensitive",feature_rule_sensitive},{"style",style}};
                     auto& rules=value["rules"];auto it=std::find_if(rules.begin(),rules.end(),[&](auto& r){return r.at("id")==feature_rule_id;});if(feature_rule_removed){if(it!=rules.end())rules.erase(it);}else if(it==rules.end())rules.push_back(rule);else *it=rule;
                 }else value[feature_name()]=style;}
-            else if(feature_category==1){int i=0;for(auto key:{"toggle_pin","toggle_protection","toggle_directory_lock"})value[key]=feature_chord[i++];}
-            else if(feature_category==2)value["mode"]=feature_notification;
+            else if(feature_category==1)value["mode"]=feature_notification;
             else {if(feature_auto!="true"&&feature_auto!="false")throw Error(2,"automatic must be true or false");value["automatic"]=feature_auto=="true";size_t used{};auto maximum=std::stoi(feature_max,&used);if(used!=feature_max.size())throw Error(2,"max_tabs must be an integer from 1 to 100");value["max_tabs"]=maximum;}
             auto full=config.features;full[feature_group()]=value;validate_features(full);
             request({{"action","features.save"},{"draft_key",feature_active_key},{"group",feature_group()},{"expected",feature_expected},{"value",value}});
@@ -665,9 +965,10 @@ public:
         if(errors&&!local_error.empty())footer.push_back(wrapped_text("! "+local_error)|color(nord::red)|size(HEIGHT,LESS_THAN,2));
         footer.push_back(nord::divider());footer.push_back(text(""));
         footer.push_back(hbox({actions->Render(),filler(),viewport_width>=110?text(tr[document?"form_document_keys":"form_keys"])|color(nord::blue):emptyElement()}));
-        Elements content{wrapped_text(tr[intro])|color(nord::blue),text("")};
+        Elements content;
+        if(intro){content.push_back(wrapped_text(tr[intro])|color(nord::blue));content.push_back(text(""));}
         if(header){content.push_back(std::move(header));content.push_back(text(""));}
-        content.push_back(document?body|flex:body|vscroll_indicator|yframe|flex);
+        content.push_back(document?body|flex:dialog_scroll_.View(std::move(body)));
         content.push_back(vbox(std::move(footer)));
         return window(text(" "+tr[title]+" ")|bold|color(nord::cyan),
             hbox({text(" "),vbox(std::move(content))|flex,text(" ")})|color(nord::foreground),ROUNDED)
@@ -680,6 +981,9 @@ public:
     void open_help() {
         modal_kind=4;show_modal=true;local_error.clear();
         std::static_pointer_cast<FormDocument>(help_document)->Reset();help_document->TakeFocus();
+    }
+    void close_tab_more() {
+        show_modal=false;local_error.clear();tab_menu->TakeFocus();
     }
     Element info(const char* key,const std::string& value,Color tint=nord::foreground) {
         return hbox({text("  "+tr[key])|color(nord::blue)|size(WIDTH,EQUAL,std::max(12,2+string_width(tr[key]))),
@@ -719,12 +1023,10 @@ public:
             text("  ↓")|color(nord::blue),
             text("  3  "+tr["global_source"])|color(nord::foreground),filler()});
     }
-    Element tab_detail(bool compact=false) {
-        auto tab=current_tab();if(tab.is_null())return vbox({paragraph(tr["empty"])|color(nord::blue),filler()});
+    Element tab_detail() {
+        auto tab=current_tab();if(tab.is_null())return filler();
         const auto path=tab.at("path").is_string()?tab.at("path").get<std::string>():tab.value("original_title",std::string{});
         auto behavior=tab.value("behavior",Json::object());
-        if(compact)return vbox({protection_badges(behavior),info("path",path)|size(HEIGHT,LESS_THAN,2),
-            info("preview",tab.value("preview_title",std::string{}),nord::cyan)|bold|size(HEIGHT,LESS_THAN,2)});
         const bool applied=tab.value("title_applied",false);
         const auto submitted=tab.value("applied_title",std::string{});
         auto actual=behavior.value("actual",Json::object()),appearance=actual.value("appearance",Json::object());
@@ -757,8 +1059,8 @@ public:
     void build() {
         auto navigation_options=choice_style();
         navigation_options.entries_option.transform=[this](const EntryState& state){
-            static const char* keys[]{"F2","F3","F4","F6","F9"};
-            const char* short_keys[]={"nav_tabs","nav_rules","nav_settings","nav_tools","nav_entries"};
+            static const char* keys[]{"F2","F3","F4","F6","F8","F9"};
+            const char* short_keys[]={"nav_tabs","nav_rules","nav_settings","nav_tools","nav_shortcuts","nav_entries"};
             auto label=text(" "+std::string(keys[state.index])+" "+(viewport_width<100?tr[short_keys[state.index]]:state.label)+" ");
             return state.active?label|bold|color(nord::background)|bgcolor(nord::cyan):
                 label|color(state.focused?nord::white:nord::blue)|bgcolor(state.focused?nord::selection:nord::background);
@@ -768,26 +1070,47 @@ public:
         search_input=CatchEvent(search_input,[=,this](Event event){if(event==Event::Escape){search.clear();rebuild_lists();tab_menu->TakeFocus();return true;}return false;});
         auto option=MenuOption::Vertical();option.on_enter=[=,this]{edit_tab();};
         option.entries_option.transform=[this](const EntryState& state){
-            auto line=table_row(tab_cells.at(state.index),tab_widths(),state.active);
+            const auto& cells=tab_cells.at(state.index);
+            auto line=table_row(viewport_width<110?std::vector<std::string>{cells[0],cells[5],cells[6]}:cells,tab_widths(),state.active);
             return state.active?line|color(nord::white)|bgcolor(nord::selection):line|color(nord::foreground);
         };
         tab_menu=Menu(&tab_labels,&selected_tab,option);
         auto has_tab=[this]{return !current_tab().is_null();};
-        auto tab_buttons=row({button("edit_tab_button",[=,this]{edit_tab();},has_tab),button("from_tab",[=,this]{edit_rule(true,true);},has_tab),button("auto",[=,this]{auto t=current_tab();if(!t.is_null())request({{"action","tab.reset"},{"tab_id",t.at("tab_id")}});},has_tab)});
-        auto feature_buttons=row({feature_button("pin","pinned","pin","unpin",nord::yellow),feature_button("protect","protected","protect","unprotect",nord::green),feature_button("lock","locked","lock","unlock",nord::purple),button("locate",[this]{auto t=current_tab();if(!t.is_null())request({{"action","tabs.locate"},{"tab_id",t.at("tab_id")}});},has_tab),button("feature_edit",[this]{edit_features();})});
+        auto open_tab_more=button("tab_more",[this]{
+            more_tab_id=current_tab().at("tab_id");
+            modal_kind=13;show_modal=true;local_error.clear();
+            auto document=std::static_pointer_cast<FormDocument>(tab_more->ChildAt(0));
+            document->Reset();document->TakeFocus();
+        },has_tab);
+        auto tab_buttons=row({button("locate",[this]{auto t=current_tab();if(!t.is_null())request({{"action","tabs.locate"},{"tab_id",t.at("tab_id")}});},has_tab),
+            button("edit_tab_button",[this]{edit_tab();},has_tab),open_tab_more,
+            button("tab_batch",[this]{page=3;tools_group=0;batch_choice->TakeFocus();},has_tab)});
+        auto observe=button("observe_start",[this]{request({{"action","agent.start"}});},[this]{return !agent.value("running",false);});
+        auto clear_filters=button("clear_tab_filters",[this]{search.clear();state_filter="all";rebuild_lists();tab_menu->TakeFocus();},
+            [this]{return agent.value("running",false)&&!tabs.empty()&&visible_ids.empty();});
         auto filter=value_choice(&state_filter,{"all","pinned","protected","locked"},{"filter_all","pinned_style","protected_style","locked_style"},[this]{rebuild_lists();});
-        auto tabs_container=Container::Vertical({search_input,filter,tab_menu,tab_buttons,feature_buttons});
+        auto tabs_container=Container::Vertical({search_input,filter,tab_menu,tab_buttons,observe,clear_filters});
         auto tabs_page=Renderer(tabs_container,[=,this]{
             
             Elements body;
             body.push_back(filter->Render());
-            body.push_back(table_row({tr["title_column"],tr["depth_column"],tr["source"],tr["status_column"],tr["window_column"]},tab_widths(),false,true)|color(nord::blue));
-            body.push_back(nord::divider());
-            body.push_back((tab_labels.empty()?text(tr["empty"]):tab_menu->Render())|vscroll_indicator|frame|flex);
-            if(viewport_width<110) {body.push_back(nord::divider());body.push_back(tab_detail(true));}
-            body.push_back(nord::divider());body.push_back(tab_buttons->Render());body.push_back(text(""));body.push_back(feature_buttons->Render());
-            auto list=nord::panel(tr["tabs"]+" · "+std::to_string(tab_labels.size()),vbox(std::move(body)));
-            if(viewport_width<110)return list;
+            if(tab_labels.empty()) {
+                const bool running=agent.value("running",false);
+                body.push_back(text(tr[!running?"tab_empty_offline":tabs.empty()?"tab_empty_running":"empty"])|color(nord::blue));
+                if(!running)body.push_back(observe->Render());
+                else if(!tabs.empty())body.push_back(clear_filters->Render());
+                body.push_back(filler());
+            }else {
+                auto headers=viewport_width<110?std::vector<std::string>{tr["title_column"],tr["path"],tr["status_column"]}:
+                    std::vector<std::string>{tr["title_column"],tr["depth_column"],tr["source"],tr["status_column"],tr["window_column"]};
+                body.push_back(table_row(headers,tab_widths(),false,true)|color(nord::blue));
+                body.push_back(nord::divider());
+                body.push_back(tab_menu->Render()|vscroll_indicator|frame|flex);
+                body.push_back(nord::divider());
+                body.push_back(tab_buttons->Render());
+            }
+            auto list=nord::panel(tr["tabs"]+" · "+std::to_string(tab_labels.size())+" / "+std::to_string(tabs.size()),vbox(std::move(body)));
+            if(viewport_width<110||tab_labels.empty())return list;
             if(viewport_width>=170) {
                 auto center=viewport_width*31/100;
                 return hbox({list|size(WIDTH,EQUAL,list_width()),text(" "),
@@ -859,7 +1182,27 @@ public:
         auto width_controls=Container::Vertical({width_choice,Maybe(fixed_input,[this]{return width_mode==1;}),
             Maybe(min_input,[this]{return width_mode==2;}),Maybe(max_input,[this]{return width_mode==2;}),width_buttons});
         auto display_buttons=row({save_display,reload_display});
-        auto settings_container=Container::Vertical({depth_input,separator_toggle,display_buttons,width_controls,language_toggle,save_language});
+        auto search_box_button=state_button("hide_search_box","show_search_box",[this]{return config.search_box_hidden;},
+            [this]{request({{"action","search-box.set"},{"hidden",!config.search_box_hidden},{"connect",true}});},
+            []{return true;},nord::cyan);
+        auto double_click_button=state_button("enable_double_click","disable_double_click",[this]{return config.double_click_parent;},
+            [this]{request({{"action","double-click-parent.set"},{"enabled",!config.double_click_parent}});},
+            []{return true;},nord::cyan);
+        auto everything_button=state_button("enable_everything","disable_everything",[this]{return config.everything_search;},
+            [this]{request({{"action","everything-search.set"},{"enabled",!config.everything_search}});},
+            []{return true;},nord::cyan);
+        auto external_tabs_button=state_button("enable_external_tabs","disable_external_tabs",[this]{return config.external_tabs;},
+            [this]{request({{"action","external-tabs.set"},{"enabled",!config.external_tabs}});},
+            []{return true;},nord::cyan);
+        auto startup_button=state_button("startup_enable","startup_disable",[this]{return config.autostart;},
+            [this]{request({{"action","startup.set"},{"enabled",!config.autostart}});},[]{return true;},nord::cyan);
+        auto missing_startup=[this]{return startup.value("requested",false)&&!startup.value("login_registered",false);};
+        auto retry_startup=button("startup_retry",[this]{request({{"action","startup.set"},{"enabled",config.autostart}});},missing_startup);
+        auto startup_buttons=row({startup_button,Maybe(retry_startup,missing_startup)});
+        auto tray_button=state_button("tray_show","tray_hide",[this]{return config.show_tray_icon;},
+            [this]{request({{"action","tray.set"},{"enabled",!config.show_tray_icon}});},[]{return true;},nord::cyan);
+        auto settings_container=Container::Vertical({depth_input,separator_toggle,display_buttons,width_controls,language_toggle,
+            save_language,search_box_button,everything_button,double_click_button,external_tabs_button,startup_buttons,tray_button});
         settings_controls=settings_container;
         auto settings_page=Renderer(settings_container,[=,this]{
             const bool columns=viewport_width>=120;
@@ -898,9 +1241,26 @@ public:
                 text("● "+tr[!agent.value("running",false)?"offline":mode=="customize"?"customizing":"observing"])|bold|color(mode=="customize"?nord::green:nord::yellow),
                 text(""),wrapped_text(tr[mode=="customize"?"settings_runtime_hint":"settings_observe_hint"])|color(nord::blue),
                 text(""),wrapped_text(tr["priority_short"])|color(nord::purple)}));
+            const bool registered=startup.value("login_registered",false);
+            const auto startup_state=tr[startup.contains("error")?"startup_unknown":startup.value("foreign_entry_preserved",false)?
+                "startup_foreign":registered?"startup_registered":missing_startup()?"startup_missing":"startup_inactive"];
+            const bool tray_registered=agent.value("tray",Json::object()).value("registered",false);
+            Elements tray_controls;
+            if(config.show_tray_icon){
+                const auto state=tray_registered?"tray_registered":agent.value("running",false)?"tray_pending":"tray_agent_stopped";
+                tray_controls.push_back(text(tr[state])|color(tray_registered?nord::green:nord::blue));
+            }
+            tray_controls.push_back(tray_button->Render());
             Elements form{card("01  "+tr["detail_display"],vbox(std::move(display))),text(""),card("02  "+tr["tab_appearance"],vbox(std::move(widths))),
-                text(""),card("03  "+tr["language"],vbox(std::move(language)))};
-            auto settings=vbox(std::move(form))|vscroll_indicator|yframe|flex;
+                text(""),card("03  "+tr["language"],vbox(std::move(language))),text(""),
+                card(tr["explorer_search_box"],vbox({search_box_button->Render(),text(""),
+                    wrapped_text(tr[config.search_box_hidden?"everything_hidden_hint":"everything_hint"])|color(nord::blue),
+                    everything_button->Render()})),text(""),
+                card(tr["double_click_parent"],double_click_button->Render()),text(""),
+                card(tr["external_tabs"],external_tabs_button->Render()),text(""),
+                card(tr["startup_title"],vbox({text(startup_state)|color(registered?nord::green:nord::blue),startup_buttons->Render()})),text(""),
+                card(tr["tray_title"],vbox(std::move(tray_controls)))};
+            auto settings=settings_scroll_.View(vbox(std::move(form)));
             Element body=settings;
             if(columns)body=hbox({settings|size(WIDTH,EQUAL,left_width),text("  "),vbox({preview_card,text(""),runtime_card,filler()})|flex});
             Elements content{text(tr["settings"])|bold|color(nord::cyan),wrapped_text(tr["settings_intro"])|color(nord::blue),text("")};
@@ -918,7 +1278,9 @@ public:
         auto restart=button("restart",[=,this]{open_confirmation({{"action","restart"},{"force",true}});});
         auto stop_agent=button("stop_agent",[=,this]{open_confirmation({{"action","agent.stop"}});});
         auto help=button("help",[=,this]{open_help();});
-        auto batch_action_choice=Make<FormChoice>(&batch_operations,&batch_operation),batch_state_choice=Make<FormChoice>(&batch_states,&batch_state);
+        batch_choice=Make<FormChoice>(&batch_operations,&batch_operation);
+        auto batch_action_choice=batch_choice;
+        auto batch_state_choice=Make<FormChoice>(&batch_states,&batch_state);
         auto batch_apply=button("batch_apply",[this]{
             if(visible_ids.empty())return;
             static const char* operations[]{"pin","protect","lock"};
@@ -937,38 +1299,50 @@ public:
         auto symbol_buttons=row({button("inspect_symbols",[this]{request({{"action","symbols.status"},{"show_result",true}});}),
             button("symbols_prepare_action",[this]{request({{"action","symbols.prepare"},{"show_result",true}});}),
             button("symbols_offline",[this]{request({{"action","symbols.prepare"},{"offline",true},{"show_result",true}});})});
-        tools_controls=Container::Vertical({batch_action_choice,batch_state_choice,batch_apply,workspace_buttons,diagnostic_buttons,maintenance_buttons,inspection_controls,utility_buttons,symbol_buttons});
+        auto explorer_actions=row({
+            button("reopen_tab",[this]{request({{"action","explorer.reopen_closed_tab"},{"show_result",true}});}),
+            button("merge_tabs",[this]{auto tab=current_tab();if(!tab.is_null())
+                open_confirmation({{"action","explorer.merge_duplicate_tabs"},{"tab_id",tab.at("tab_id")},{"show_result",true}});},has_tab),
+            button("open_parent",[this]{auto tab=current_tab();if(!tab.is_null())
+                request({{"action","explorer.open_parent_tab"},{"tab_id",tab.at("tab_id")},{"show_result",true}});},has_tab),
+            button("toggle_extensions",[this]{request({{"action","explorer.toggle_file_extensions"},{"show_result",true}});})});
+        auto tools_scripts=button("script_actions",[this]{open_scripts();});
+        auto tools_archives=row({button("archive_settings",[this]{open_archive_settings();}),
+            button("archive_tasks",[this]{
+                show_modal=true;modal_kind=12;local_error.clear();request({{"action","archives.jobs"}});
+            })});
+        tool_groups={
+            Container::Vertical({batch_action_choice,batch_state_choice,batch_apply,explorer_actions}),
+            workspace_buttons,
+            Container::Vertical({tools_archives,tools_scripts}),
+            Container::Vertical({diagnostic_buttons,maintenance_buttons,inspection_controls,utility_buttons,symbol_buttons})};
+        tools_selector=Make<FormChoice>(&tools_groups,&tools_group);
+        auto tool_pages=Container::Tab(Components(tool_groups.begin(),tool_groups.end()),&tools_group);
+        tools_controls=Container::Vertical({tools_selector,tool_pages});
         auto tools_page=Renderer(tools_controls,[=,this]{
-            const bool columns=viewport_width>=120;
-            const int total=std::min(columns?148:88,viewport_width-4),left_width=columns?total-54:total;
-            auto batch=vbox({form_field("tools_batch_operation",batch_action_choice),text(""),form_field("tools_batch_state",batch_state_choice),text(""),
-                wrapped_text(tr["tools_batch_scope"]+"  "+std::to_string(visible_ids.size()))|bold|color(visible_ids.empty()?nord::blue:nord::yellow),
-                wrapped_text(tr["tools_batch_hint"])|color(nord::blue),text(""),batch_apply->Render()});
-            auto workspace=vbox({wrapped_text(tr["tools_workspace_hint"])|color(nord::blue),text(""),workspace_buttons->Render()});
-            auto diagnostics=vbox({wrapped_text(tr["tools_diagnostic_hint"])|color(nord::blue),text(""),diagnostic_buttons->Render()});
-            auto maintenance=vbox({wrapped_text(tr["tools_maintenance_hint"])|color(nord::yellow),text(""),maintenance_buttons->Render()});
-            Elements cards{page_card("01  "+tr["tools_batch_title"],batch),text(""),page_card("02  "+tr["tools_workspace_title"],workspace),
-                text(""),page_card("03  "+tr["tools_diagnostic_title"],diagnostics),text(""),page_card("04  "+tr["tools_maintenance_title"],maintenance)};
-            auto tab=current_tab();
-            cards.push_back(text(""));cards.push_back(page_card("05  "+tr["inspect_title"],vbox({
-                wrapped_text(tr["inspect_hint"])|color(nord::blue),text(""),inspect_choice->Render(),text(""),
-                wrapped_text(tr["current_style"]+": "+(tab.is_null()?tr["empty"]:tab.at("path").is_string()?tab.at("path").get<std::string>():tab.value("original_title",std::string{})))|color(nord::cyan)|size(HEIGHT,LESS_THAN,2),
-                text(""),inspect_buttons->Render()})));
-            cards.push_back(text(""));cards.push_back(page_card("06  "+tr["utility_title"],vbox({wrapped_text(tr["utility_hint"])|color(nord::blue),text(""),utility_buttons->Render()})));
-            cards.push_back(text(""));cards.push_back(page_card("07  "+tr["symbols_title"],vbox({wrapped_text(tr["symbols_hint"])|color(nord::blue),text(""),symbol_buttons->Render()})));
-            int applied=0,overrides=0;for(const auto& item:tabs){if(item.value("title_applied",false))++applied;if(!item.at("override").is_null())++overrides;}
-            auto metric=[this](const char* key,const std::string& value,nord::Rgb tint){return hbox({text(tr[key])|color(nord::foreground),filler(),text(value)|bold|color(tint)});};
-            const bool running=agent.value("running",false),customizing=agent.value("mode",std::string{})=="customize";
-            auto runtime=page_card(tr["runtime_summary"],vbox({text("● "+tr[!running?"offline":customizing?"customizing":"observing"])|bold|color(running&&customizing?nord::green:nord::yellow),text(""),
-                metric("tabs",std::to_string(tabs.size()),nord::white),metric("applied",std::to_string(applied)+" / "+std::to_string(tabs.size()),applied==tabs.size()&&!tabs.empty()?nord::green:nord::yellow),
-                metric("revision",std::to_string(config.revision),nord::blue),text(""),wrapped_text(tr[running&&customizing?"settings_runtime_hint":"settings_observe_hint"])|color(nord::blue)}));
-            auto policy=page_card(tr["policy_summary"],vbox({metric("global_source",depth_text(config.depth),nord::cyan),metric("rules",std::to_string(config.rules.size()),nord::purple),metric("tab_source",std::to_string(overrides),nord::purple),text(""),
-                wrapped_text(tr["priority_short"])|color(nord::purple)}));
-            if(!columns){cards.push_back(text(""));cards.push_back(runtime);cards.push_back(text(""));cards.push_back(policy);}
-            auto controls=vbox(std::move(cards))|vscroll_indicator|yframe|flex;
-            Element body=controls;
-            if(columns)body=hbox({controls|size(WIDTH,EQUAL,left_width),text("  "),vbox({runtime,text(""),policy,filler()})|flex});
-            return hbox({filler(),vbox({text(tr["tools"])|bold|color(nord::cyan),wrapped_text(tr["tools_intro"])|color(nord::blue),text(""),body|flex})|size(WIDTH,EQUAL,total),filler()});
+            auto section=[this](const char* key){return nord::section(tr[key]);};
+            Elements content;
+            switch(tools_group) {
+                case 0:
+                    content={section("tools_batch_title"),text(tr["tools_batch_scope"]+"  "+std::to_string(visible_ids.size()))|color(nord::cyan),
+                        form_field("tools_batch_operation",batch_action_choice),form_field("tools_batch_state",batch_state_choice),batch_apply->Render(),
+                        text(""),section("explorer_actions"),explorer_actions->Render()};
+                    break;
+                case 1:
+                    content={workspace_buttons->Render()};
+                    break;
+                case 2:
+                    content={section("archive_section"),tools_archives->Render(),text(""),tools_scripts->Render()};
+                    break;
+                case 3:
+                    content={section("tools_diagnostic_title"),diagnostic_buttons->Render(),text(""),
+                        section("inspect_title"),inspect_choice->Render(),inspect_buttons->Render(),text(""),
+                        section("utility_title"),utility_buttons->Render(),text(""),section("symbols_title"),symbol_buttons->Render(),
+                        text(""),section("tools_maintenance_title"),maintenance_buttons->Render()};
+                    break;
+            }
+            auto body=vbox(std::move(content))|vscroll_indicator|yframe|flex;
+            return hbox({filler(),vbox({tools_selector->Render(),nord::divider(),body})|size(WIDTH,EQUAL,std::min(100,viewport_width-4)),filler()});
         });
         auto entry_options=MenuOption::Vertical();entry_options.on_enter=[this]{edit_entry(false);};
         entry_menu=Menu(&entry_labels,&selected_entry,entry_options);
@@ -985,18 +1359,72 @@ public:
             auto registration=agent.value("directory_shortcuts",Json::object());if(!registration.value("errors",Json::object()).empty())body.push_back(paragraph(registration.at("errors").dump())|color(nord::red));
             return nord::panel(tr["directories"],vbox(std::move(body)));
         });
-        auto pages=Container::Tab({tabs_page,rules_page,settings_page,tools_page,directories_page},&page);
-        auto actions=row({button("enable",[=,this]{request({{"action","start"}});}),button("disable",[=,this]{request({{"action","stop"}});}),button("refresh",[=,this]{request({{"action","snapshot"},{"manual",true},{"connect",true}});}),button("quit",[=,this]{screen.Exit();})});
+        const std::array chord_keys{"shortcut_pin","shortcut_protect","shortcut_lock","shortcut_terminal",
+            "shortcut_copy_directory","shortcut_copy_selection","shortcut_clipboard","shortcut_new_folder","shortcut_new_file",
+            "shortcut_reopen_tab","shortcut_merge_tabs","shortcut_open_parent","shortcut_toggle_extensions","shortcut_transfer_selection","shortcut_extract_archive","shortcut_clipboard"};
+        static_assert(chord_keys.size()==explorer_shortcut_keys.size());
+        shortcut_labels.resize(chord_keys.size());
+        auto shortcut_options=form_input_options();
+        shortcut_options.on_change=[this]{local_error.clear();};
+        shortcut_input=Input(&edited_chord,&tr["form_shortcut_placeholder"],shortcut_options);
+        auto preset_input=Input(&edited_folder_preset,&tr["form_value_placeholder"],shortcut_options);
+        shortcut_actions=row({button("save_shortcuts",[this]{apply_shortcuts();},
+                [this]{return shortcut_draft()!=shortcut_expected;}),
+            button("reload_shortcuts",[this]{load_shortcut_draft(config.features.at("shortcuts"));shortcut_error.clear();}),
+            button("script_actions",[this]{open_scripts();})});
+        auto shortcut_widths=[this]{return std::vector<int>{std::min(92,viewport_width-4)-38,20,9};};
+        auto shortcut_options_menu=MenuOption::Vertical();
+        shortcut_options_menu.on_enter=[this]{edit_shortcut();};
+        shortcut_options_menu.entries_option.transform=[=,this](const EntryState& state){
+            const auto index=static_cast<size_t>(state.index);
+            const auto key=explorer_shortcut_keys[index];
+            const bool changed=shortcut_chords[index]!=shortcut_expected.at(key).get_ref<const std::string&>()||
+                (std::string_view(key)=="new_folder"&&folder_preset!=shortcut_expected.at("new_folder_name").get_ref<const std::string&>());
+            const bool conflict=shortcut_conflict_rows[index]||!shortcut_registration_error(index).empty();
+            auto line=table_row({tr[chord_keys[index]],shortcut_chords[index].empty()?"—":shortcut_chords[index],
+                tr[conflict?"shortcut_conflict_row":changed?"shortcut_draft_row":shortcut_chords[index].empty()?"shortcut_unbound":"shortcut_bound"]},
+                shortcut_widths(),state.active);
+            if(state.active)line=line|color(nord::white)|bgcolor(nord::selection);
+            else if(conflict)line=line|color(nord::yellow);
+            if(index==0||index+1==chord_keys.size())
+                return vbox({nord::section(tr[index==0?"shortcut_scope_explorer":"shortcut_scope_global"]),line});
+            return line;
+        };
+        shortcut_menu=Menu(&shortcut_labels,&selected_shortcut,shortcut_options_menu);
+        auto edit_binding=button("shortcut_edit",[this]{edit_shortcut();});
+        auto shortcut_controls=Container::Vertical({shortcut_menu,edit_binding,shortcut_actions});
+        auto shortcuts_page=Renderer(shortcut_controls,[=,this]{
+            shortcut_conflict_rows=shortcut_conflicts();
+            auto error=shortcut_registration_error(selected_shortcut);
+            if(error.empty()&&shortcut_conflict_rows[selected_shortcut])error=tr["shortcut_duplicate"];
+            auto status=shortcut_error.empty()?
+                (shortcut_draft()==shortcut_expected?emptyElement():text(tr["feature_unsaved"])|color(nord::yellow)):
+                wrapped_text(shortcut_error)|color(nord::red)|size(HEIGHT,LESS_THAN,3);
+            auto content=vbox({table_row({tr["shortcut_action"],tr["shortcut_binding"],tr["status_column"]},shortcut_widths(),false,true)|color(nord::blue),
+                nord::divider(),shortcut_menu->Render()|vscroll_indicator|frame|flex,nord::divider(),
+                error.empty()?emptyElement():wrapped_text(error)|color(nord::yellow)|size(HEIGHT,LESS_THAN,3),
+                status,hbox({edit_binding->Render(),text(" "),shortcut_actions->Render()|flex})});
+            return hbox({filler(),content|size(WIDTH,EQUAL,std::min(92,viewport_width-4)),filler()});
+        });
+        auto pages=Container::Tab({tabs_page,rules_page,settings_page,tools_page,shortcuts_page,directories_page},&page);
+        auto customizing=[this]{return agent.value("running",false)&&agent.value("mode",std::string{})=="customize";};
+        auto actions=state_button("enable","disable",customizing,[this,customizing]{request({{"action",customizing()?"stop":"start"}});},
+            []{return true;},nord::cyan);
         auto main_container=Container::Vertical({navigation,pages,actions});
         auto main=Renderer(main_container,[=,this]{
             
-            std::string state=!agent.value("running",false)?tr["offline"]:agent.value("mode",std::string{})=="customize"?tr[agent.value("runtime_applied",false)?"customizing":"customize_unconfirmed"]:tr["observing"];
-            auto search_bar=page==0?search_input->Render()|size(WIDTH,EQUAL,std::max(20,viewport_width/3)):text("Nord / Truecolor")|color(nord::blue);
-            return vbox({hbox({text(" Sinan ")|bold|color(nord::cyan),text(" "),search_bar,filler(),text(" "+state+" ")|color(agent.value("mode",std::string{})=="customize"?nord::green:nord::blue)}),
-                hbox({navigation->Render(),filler(),text(std::to_string(tabs.size())+" / "+std::to_string(config.rules.size())+" ")|color(nord::blue)}),
+            const auto& state=tr[!agent.value("running",false)?"offline":!customizing()?"observing":
+                agent.value("runtime_applied",false)?"status_customizing":"status_unconfirmed"];
+            auto search_bar=page==0?search_input->Render()|size(WIDTH,EQUAL,std::max(20,viewport_width/3)):emptyElement();
+            auto status_color=notice_key=="failed"||notice_key=="width_conflict"?nord::red:
+                notice_key=="partial"||notice_key=="width_pending"?nord::yellow:nord::green;
+            auto message=busy?tr["busy"]:notice_key=="ready"?std::string{}:tr[notice_key];
+            return vbox({hbox({text(" Sinan ")|bold|color(nord::cyan),text(" "),search_bar,filler()}),
+                navigation->Render(),
                 pages->Render()|flex,
-                actions->Render(),
-                hbox({text(" "+tr[busy?"busy":notice_key])|color(notice_key=="failed"||notice_key=="width_conflict"?nord::red:notice_key=="partial"||notice_key=="width_pending"?nord::yellow:nord::green),filler(),text("F1 ?  F5 ↻  F7 中/EN  Ctrl+Q ")|color(nord::blue)}),
+                hbox({text(" "+state+" ")|color(customizing()?nord::green:nord::blue),
+                    hbox({message.empty()?emptyElement():text("· "+message+" ")|color(status_color),filler()})|xflex,
+                    text("F1 "+tr["help_short"]+" ")|color(nord::blue),actions->Render()}),
                 detail.empty()?emptyElement():paragraph(tr["details"]+": "+detail)|color(nord::yellow)|size(HEIGHT,LESS_THAN,3)});
         });
         auto tab_mode_toggle=Make<FormChoice>(&tab_modes,&tab_mode);
@@ -1010,7 +1438,12 @@ public:
                 show_modal=false;request(value);
             }catch(const std::exception& e){local_error=tr["failed"]+": "+e.what();}
         });
-        auto cancel=[=,this]{if(modal_kind==6)keep_feature_draft();show_modal=false;local_error.clear();};auto tab_cancel=button("cancel",cancel);
+        auto cancel=[=,this]{
+            if(modal_kind==6)keep_feature_draft();
+            show_modal=false;dialog_scroll_.Reset();local_error.clear();
+            if(modal_kind==14)shortcut_menu->TakeFocus();
+            if(modal_kind==13)close_tab_more();
+        };auto tab_cancel=button("cancel",cancel);
         auto tab_modal_actions=row({tab_apply,tab_cancel});
         tab_editor=Container::Vertical({tab_mode_toggle,tab_depth_input,tab_modal_actions});
         auto tab_modal=Renderer(tab_editor,[=,this]{
@@ -1073,10 +1506,12 @@ public:
         auto confirm_container=row({confirm,confirm_cancel});
         auto confirm_modal=Renderer(confirm_container,[=,this]{
             auto action=confirmation.value("action",std::string{});auto key=action=="restart"?"confirm_restart":action=="agent.stop"?"confirm_stop_agent":action=="tabs.batch"?"confirm_batch":action=="features.save"&&confirmation.value("group",std::string{})=="directories"?"confirm_entry_delete":"confirm_delete";
+            if(action=="explorer.merge_duplicate_tabs")key="confirm_merge_tabs";
             if(action=="install"||action=="uninstall"||action=="path.add"||action=="path.remove")key=action=="install"?"confirm_install":action=="uninstall"?"confirm_uninstall":action=="path.add"?"confirm_path_add":"confirm_path_remove";
             if(action=="display.reset")key="confirm_display_reset";
             if(action=="tabs.style-reset")key="confirm_style_reset";
             if(action=="features.save"&&confirmation.value("import",false))key="confirm_import";
+            if(action=="features.save"&&confirmation.value("group",std::string{})=="scripts")key="confirm_script_delete";
             Elements content{nord::section(tr["form_operation_impact"]),text(""),wrapped_text(tr[key])|bold|color(nord::yellow)};
             std::string context;
             if(confirmation.contains("context"))context=confirmation.at("context");
@@ -1099,8 +1534,10 @@ public:
         help_document=Make<FormDocument>([this]{return vbox({nord::section("01  "+tr["form_navigation"]),text(""),
             wrapped_text(tr["form_help_navigation"]),text(""),nord::section("02  "+tr["form_editing"]),text(""),
             wrapped_text(tr["form_help_editing"]),text(""),nord::section("03  "+tr["runtime_summary"]),text(""),wrapped_text(tr["form_help_runtime"])});});
-        auto help_controls=Container::Vertical({help_document,close_help});
-        auto help_modal=Renderer(help_controls,[=,this]{return dialog("help","form_help_intro",help_document->Render(),close_help,92,30,nullptr,true,false);});
+        auto help_actions=row({button("refresh",[this]{show_modal=false;request({{"action","snapshot"},{"manual",true},{"connect",true}});}),
+            button("quit",[this]{screen.Exit();}),close_help});
+        auto help_controls=Container::Vertical({help_document,help_actions});
+        auto help_modal=Renderer(help_controls,[=,this]{return dialog("help","form_help_intro",help_document->Render(),help_actions,92,30,nullptr,true,false);});
         auto close_result=button("close_dialog",cancel);
         result_document=Make<FormDocument>([this]{
             if(diagnostic_result)return wrapped_text(test_result.is_object()&&test_result.contains("text")?test_result.at("text").get<std::string>():test_result.dump(2))|color(nord::foreground);
@@ -1139,12 +1576,9 @@ public:
         }
         auto style_children=style_inputs;style_children[18]=Maybe(style_inputs[18],[this]{return feature_target>=1&&feature_target<=3;});style_children.push_back(Maybe(appearance_rule_fields,[this]{return feature_target==5;}));
         auto style_controls=Container::Vertical(style_children);
-        Components chord_inputs;std::vector<const char*> chord_keys{"shortcut_pin","shortcut_protect","shortcut_lock"};
-        for(int i=0;i<3;++i){shortcut_inputs[i]=feature_input(&feature_chord[i],chord_keys[i]);chord_inputs.push_back(shortcut_inputs[i]);}
-        auto chord_controls=Container::Vertical(chord_inputs);
         auto notification_input=value_choice(&feature_notification,{"all","errors","off"},{"notify_all","notify_errors","notify_off"},changed);
         auto automatic_input=value_choice(&feature_auto,{"false","true"},{"state_off","state_on"},changed),maximum_input=feature_input(&feature_max,"restore_max");
-        auto categories=Container::Tab({style_controls,chord_controls,notification_input,Container::Vertical({automatic_input,maximum_input})},&feature_category);
+        auto categories=Container::Tab({style_controls,notification_input,Container::Vertical({automatic_input,maximum_input})},&feature_category);
         auto feature_actions=row({button("feature_apply",[this]{apply_features();},[this]{return feature_category!=0||feature_target!=4||!feature_tab.empty();}),button("feature_reload",[this]{load_feature_draft();local_error.clear();}),button("cancel",cancel)});
         feature_editor=Container::Vertical({category,categories,feature_actions});
         auto feature_modal=Renderer(feature_editor,[=,this]{
@@ -1185,26 +1619,24 @@ public:
                     header.push_back(flexbox({text(tr["feature_preview"]+" · ")|color(nord::blue),example},FlexboxConfig().SetGap(1,0)));
                     if(text_color!="system"&&bg!="system")header.push_back(text(tr["form_contrast"]+": "+std::to_string(contrast_ratio(text_color,bg))+(contrast_ratio(text_color,bg)<4.5?" < 4.5":""))|color(nord::yellow));
                 }catch(const std::exception& ex){header.push_back(wrapped_text(ex.what())|color(nord::yellow)|size(HEIGHT,LESS_THAN,2));}
-            }else if(feature_category==1){
-                fields={nord::section(tr["shortcuts_category"]),text(""),wrapped_text(tr["shortcut_capture_hint"])|color(nord::blue),text("")};
-                for(int i=0;i<3;++i){fields.push_back(form_field(chord_keys[i],chord_inputs[i]));fields.push_back(text(""));}
-            }else if(feature_category==2)fields={nord::section(tr["notifications_category"]),text(""),form_field("form_notification_mode",notification_input)};
+            }else if(feature_category==1)fields={nord::section(tr["notifications_category"]),text(""),form_field("form_notification_mode",notification_input)};
             else fields={nord::section(tr["restore_category"]),text(""),form_field("form_restore_auto",automatic_input),text(""),form_field("form_restore_max",maximum_input,"form_restore_max_hint")};
             return dialog("features","form_feature_intro",vbox(std::move(fields)),feature_actions,104,34,vbox(std::move(header)));
         });
         auto directory_id=Input(&entry_id,&tr["form_entry_id_placeholder"],form_input_options()),directory_name=Input(&entry_name,&tr["form_entry_name_placeholder"],form_input_options());
         auto directory_path=Input(&entry_path,&tr["form_test_placeholder"],form_input_options()),directory_chord=Input(&entry_shortcut,&tr["form_shortcut_placeholder"],form_input_options());
-        shortcut_inputs[3]=directory_chord;
+        directory_chord_input=directory_chord;
         auto directory_enabled=Checkbox(&tr["enabled"],&entry_enabled,form_checkbox_options()),directory_descendants=Checkbox(&tr["entry_descendants"],&entry_descendants,form_checkbox_options());
         auto directory_title=Make<FormChoice>(&entry_title_labels,&entry_title_mode);
+        auto directory_scope=value_choice(&entry_scope,{"global","explorer"},{"shortcut_scope_global","shortcut_scope_explorer"});
         auto directory_buttons=row({button("feature_apply",[this]{apply_entry();}),button("cancel",cancel)});
-        entry_editor=Container::Vertical({directory_id,directory_name,directory_path,directory_chord,directory_enabled,directory_descendants,directory_title,directory_buttons});
+        entry_editor=Container::Vertical({directory_id,directory_name,directory_path,directory_chord,directory_enabled,directory_descendants,directory_title,directory_scope,directory_buttons});
         auto directory_modal=Renderer(entry_editor,[=,this]{
             std::string preview;bool valid=true;
             try{auto display=config.display_options();display.entries=entries_from_json(Json::array({entry_draft()}));auto path=entry_path+(entry_descendants?"\\src\\config":"");preview=utf8(format_title(wide(path),display).text);}catch(const std::exception& ex){preview=ex.what();valid=false;}
             auto body=vbox({nord::section("01  "+tr["form_entry_identity"]),text(""),
                 form_grid({form_field("entry_id",directory_id),form_field("entry_name",directory_name)}),text(""),form_field("path",directory_path),text(""),
-                nord::section("02  "+tr["shortcuts_category"]),text(""),form_field("entry_shortcut",directory_chord,"shortcut_capture_hint"),text(""),
+                nord::section("02  "+tr["shortcuts_category"]),text(""),form_field("entry_shortcut",directory_chord,"shortcut_capture_hint"),form_field("shortcut_scope",directory_scope),text(""),
                 nord::section("03  "+tr["form_display"]),text(""),flexbox({directory_enabled->Render(),directory_descendants->Render()},FlexboxConfig().SetGap(2,0)),
                 text(""),wrapped_text(tr["entry_title"])|bold,directory_title->Render(),text(""),
                 form_card("form_unsaved",wrapped_text(preview)|bold|color(valid?nord::cyan:nord::yellow))});
@@ -1246,12 +1678,140 @@ public:
             }
             return dialog(utility_kind==0?"preview_open":utility_kind==1?"style_import":"manage_open",utility_kind==0?"preview_hint":utility_kind==1?"import_hint":"utility_hint",vbox(std::move(body)),utility_close,100,32);
         });
-        auto modal_pages=Container::Tab({tab_modal,rule_modal,confirm_modal,help_modal,result_modal,feature_modal,directory_modal,utility_modal},&modal_index_);
+        auto script_options=MenuOption::Vertical();
+        script_options.on_enter=[this]{edit_script(false);};
+        script_menu=Menu(&script_labels,&selected_script,script_options);
+        script_add_button=button("script_add",[this]{edit_script(true);});
+        auto saved_script=[this]{return has_script();};
+        auto script_buttons=row({script_add_button,button("script_edit",[this]{edit_script(false);},saved_script),
+            button("script_remove",[this]{remove_script();},saved_script),button("script_run",[this]{run_script();},[this]{
+                if(!agent.value("running",false)||!has_script())return false;
+                const auto tab=current_tab();
+                return current_script().at("scope")=="global"||(!tab.is_null()&&tab.value("observed",true)&&tab.at("path").is_string());
+            }),button("close_dialog",cancel)});
+        auto script_list_controls=Container::Vertical({script_menu,script_buttons});
+        auto script_list_modal=Renderer(script_list_controls,[=,this]{
+            Elements body;
+            if(has_script()) {
+                body.push_back(script_menu->Render()|vscroll_indicator|yframe|size(HEIGHT,LESS_THAN,8));
+                const auto& script=current_script();
+                body.push_back(nord::divider());
+                body.push_back(wrapped_text(script.at("path").get<std::string>())|color(nord::cyan));
+                const auto scope=script.at("scope")=="global"?"shortcut_scope_global":"shortcut_scope_explorer";
+                const auto chord=script.at("shortcut").get<std::string>();
+                body.push_back(text(tr[scope]+(chord.empty()?"":"  ·  "+chord))|bold);
+            } else body.push_back(text(tr["script_empty"])|color(nord::blue));
+            if(!agent.value("running",false))body.push_back(text(tr["script_needs_agent"])|color(nord::yellow));
+            return dialog("script_actions","script_list_hint",vbox(std::move(body)),script_buttons,92,25);
+        });
+        auto script_id_input=Input(&script_id,&tr["form_entry_id_placeholder"],form_input_options());
+        auto script_name_input=Input(&script_name,&tr["form_entry_name_placeholder"],form_input_options());
+        auto script_path_input=Input(&script_path,&tr["script_path_placeholder"],form_input_options());
+        script_chord_input=Input(&script_chord,&tr["form_shortcut_placeholder"],form_input_options());
+        auto script_scope_choice=value_choice(&script_scope,{"global","explorer"},{"shortcut_scope_global","shortcut_scope_explorer"});
+        auto script_edit_buttons=row({button("script_save",[this]{save_script();}),button("script_back",[this]{open_scripts();})});
+        script_editor=Container::Vertical({script_id_input,script_name_input,script_path_input,script_scope_choice,script_chord_input,script_edit_buttons});
+        auto script_editor_modal=Renderer(script_editor,[=,this]{
+            auto body=vbox({form_grid({form_field("entry_id",script_id_input),form_field("entry_name",script_name_input)}),
+                text(""),form_field("path",script_path_input),text(""),form_field("shortcut_scope",script_scope_choice),
+                text(""),form_field("entry_shortcut",script_chord_input,"shortcut_capture_hint")});
+            return dialog(editing_script.empty()?"script_add":"script_edit","script_edit_hint",body,script_edit_buttons,92,27);
+        });
+        auto archive_tool_menu=Menu(&archive_tools,&archive_tool_row,MenuOption::Vertical());
+        auto archive_rule_menu=Menu(&archive_rules,&archive_rule_row,MenuOption::Vertical());
+        auto tool_id=Input(&archive_id,form_input_options());
+        auto tool_name=Input(&archive_name,form_input_options());
+        auto tool_path=Input(&archive_path,form_input_options());
+        auto tool_type=value_choice(&archive_type,{"7zip","rar","tar"},{"archive_7zip","archive_winrar","archive_tar"});
+        auto rule_suffix=Input(&archive_suffix,form_input_options());
+        auto rule_tool=Input(&archive_rule_tool,form_input_options());
+        auto recycle=Checkbox(&tr["archive_recycle"],&archive_recycle,form_checkbox_options());
+        auto has_tools=[this]{return !archive_tools.empty();};
+        auto has_rules=[this]{return !archive_rules.empty();};
+        auto tool_buttons=row({button("archive_edit_tool",[this]{edit_archive_tool();},has_tools),
+            button("archive_set_default",[this]{
+                archive_draft["default_tool"]=archive_draft.at("tools").at(archive_tool_row).at("id");
+                rebuild_archive_rows();
+            },has_tools),button("archive_remove_tool",[this]{remove_archive_tool();},has_tools)});
+        auto save_tool=button("archive_apply_tool",[this]{save_archive_tool();});
+        auto archive_rule_buttons=row({button("archive_apply_rule",[this]{save_archive_rule();}),
+            button("archive_edit_rule",[this]{edit_archive_rule(false);},has_rules),
+            button("archive_remove_rule",[this]{edit_archive_rule(true);},has_rules)});
+        auto archive_save_buttons=row({button("archive_save",[this]{
+            archive_draft["recycle"]=archive_recycle;
+            request({{"action","features.save"},{"group","archives"},{"expected",archive_expected},{"value",archive_draft}});
+        }),button("close_dialog",cancel)});
+        auto archive_fields=Container::Vertical({Maybe(archive_tool_menu,has_tools),tool_buttons,tool_type,tool_id,tool_name,
+            tool_path,save_tool,Maybe(archive_rule_menu,has_rules),rule_suffix,rule_tool,archive_rule_buttons,recycle,archive_save_buttons});
+        auto archive_settings_modal=Renderer(archive_fields,[=,this]{
+            Elements body{
+                text(tr["archive_tools"])|bold|color(nord::cyan),
+                has_tools()?archive_tool_menu->Render()|vscroll_indicator|yframe|size(HEIGHT,LESS_THAN,5):text(tr["archive_empty_tools"]),
+                tool_buttons->Render(),
+                form_field("archive_type",tool_type),
+                form_grid({form_field("entry_id",tool_id),form_field("entry_name",tool_name)}),
+                form_field("path",tool_path),save_tool->Render(),nord::divider(),
+                text(tr["archive_formats"])|bold|color(nord::cyan),
+                has_rules()?archive_rule_menu->Render()|vscroll_indicator|yframe|size(HEIGHT,LESS_THAN,5):text(tr["archive_empty_rules"]),
+                form_grid({form_field("archive_suffix",rule_suffix),form_field("archive_rule_tool",rule_tool)}),
+                archive_rule_buttons->Render(),nord::divider(),recycle->Render()};
+            return dialog("archive_settings","archive_settings_hint",vbox(std::move(body)),archive_save_buttons,92,34);
+        });
+        auto archive_job_menu=Menu(&archive_job_labels,&archive_job_row,MenuOption::Vertical());
+        auto job_buttons=row({button("archive_refresh_jobs",[this]{request({{"action","archives.jobs"}});}),
+            button("archive_cancel_job",[this]{request({{"action","archives.cancel"},{"id",selected_archive_job().at("id")}});},[this]{
+                const auto state=selected_archive_job().value("state",std::string{});
+                return state=="queued"||state=="running";
+            }),button("archive_open_result",[this]{request({{"action","archives.open"},{"id",selected_archive_job().at("id")}});},
+                [this]{return selected_archive_job().contains("output");}),button("close_dialog",cancel)});
+        auto job_fields=Container::Vertical({Maybe(archive_job_menu,[this]{return !archive_job_labels.empty();}),job_buttons});
+        auto archive_jobs_modal=Renderer(job_fields,[=,this]{
+            Elements body;
+            if(archive_job_labels.empty())body.push_back(text(tr["archive_empty_jobs"]));
+            else {
+                body.push_back(archive_job_menu->Render()|vscroll_indicator|yframe|size(HEIGHT,LESS_THAN,9));
+                const auto job=selected_archive_job();
+                if(job.contains("output"))body.push_back(wrapped_text(job.at("output").get<std::string>())|color(nord::cyan));
+                const auto location=job.value("location",std::string{});
+                if(!location.empty())body.push_back(text(tr["archive_location_"+location]));
+                const auto recycle_status=job.value("recycle",std::string{});
+                if(!recycle_status.empty())body.push_back(text(tr["archive_recycle_"+recycle_status]));
+                const auto issue=job.value("error",std::string{});
+                if(!issue.empty())body.push_back(wrapped_text(issue)|color(nord::yellow));
+            }
+            return dialog("archive_tasks","archive_jobs_hint",vbox(std::move(body)),job_buttons,92,27);
+        });
+        auto tab_more_actions=row({feature_button("pin","pinned","pin","unpin",nord::yellow),
+            feature_button("protect","protected","protect","unprotect",nord::green),
+            feature_button("lock","locked","lock","unlock",nord::purple),
+            button("auto",[this]{auto tab=current_tab();if(!tab.is_null())request({{"action","tab.reset"},{"tab_id",tab.at("tab_id")}});},has_tab),
+            button("from_tab",[this]{edit_rule(true,true);},has_tab),
+            button("feature_edit",[this]{edit_features();}),button("close_dialog",cancel)});
+        auto tab_more_document=Make<FormDocument>([this]{return tab_detail();});
+        tab_more=Container::Vertical({tab_more_document,tab_more_actions});
+        auto tab_more_modal=Renderer(tab_more,[=,this]{return dialog("tab_details",nullptr,tab_more_document->Render(),tab_more_actions,88,29,nullptr,true);});
+        auto shortcut_edit_actions=row({button("apply",[this]{stage_shortcut();}),button("cancel",cancel)});
+        auto shortcut_editor=Container::Vertical({shortcut_input,Maybe(preset_input,[this]{
+            return std::string_view(explorer_shortcut_keys[selected_shortcut])=="new_folder";
+        }),shortcut_edit_actions});
+        auto shortcut_modal=Renderer(shortcut_editor,[=,this]{
+            Elements fields{nord::section(tr[chord_keys[selected_shortcut]]),form_field("shortcut_binding",shortcut_input)};
+            if(std::string_view(explorer_shortcut_keys[selected_shortcut])=="new_folder")
+                fields.push_back(form_field("folder_preset",preset_input));
+            return dialog("shortcut_edit","shortcut_capture_hint",vbox(std::move(fields)),shortcut_edit_actions,64,15);
+        });
+        auto modal_pages=Container::Tab({tab_modal,rule_modal,confirm_modal,help_modal,result_modal,feature_modal,directory_modal,
+            utility_modal,script_list_modal,script_editor_modal,archive_settings_modal,archive_jobs_modal,tab_more_modal,shortcut_modal},&modal_index_);
         auto modal_layer=Renderer(modal_pages,[modal_pages]{return modal_pages->Render()|borderEmpty;});
         auto backdrop=Renderer(main,[main,this]{auto content=main->Render();return show_modal?content|dim:content;});
         root=Modal(backdrop,modal_layer,&show_modal);
         root=CatchEvent(root,[=,this](Event event){
             if(event==Event::Custom)return true;
+            if(show_modal&&modal_kind!=4&&modal_kind!=5&&modal_kind!=13&&event.is_mouse()&&dialog_scroll_.OnMouse(event))return true;
+            if(!show_modal&&page==2) {
+                if(event.is_mouse()&&settings_scroll_.OnMouse(event))return true;
+                if(settings_scroll_.OnPageKey(event))return true;
+            }
             if(auto field=focused_shortcut()) {
                 auto bytes=event.input();
                 if(bytes.size()==1){auto key=static_cast<unsigned char>(bytes[0]);
@@ -1263,30 +1823,52 @@ public:
                 language=resolved_language(language)=="en"?"zh-CN":"en";language_choice=language=="en"?2:1;
                 language_override=true;tr.set_language(language);relabel();rebuild_lists();return true;
             }
+            auto page_focus=[&](Components& controls){
+                if(page==3){focus_leaves(tools_selector,controls);focus_leaves(tool_groups[tools_group],controls);}
+                else focus_leaves(pages->ChildAt(page),controls);
+            };
             if(event==Event::Tab||event==Event::TabReverse) {
                 // Menus consume Tab themselves; use one focus order across nested containers.
                 modal_index_=std::max(0,modal_kind-1);Components controls;
                 if(show_modal)focus_leaves(modal_pages->ChildAt(modal_index_),controls);
-                else {focus_leaves(navigation,controls);focus_leaves(pages->ChildAt(page),controls);focus_leaves(actions,controls);}
+                else {focus_leaves(navigation,controls);page_focus(controls);focus_leaves(actions,controls);}
                 if(controls.empty())return true;
                 int index=-1;for(size_t i=0;i<controls.size();++i)if(controls[i]->Focused())index=static_cast<int>(i);
                 auto count=static_cast<int>(controls.size());
-                controls[(index+(event==Event::Tab?1:count-1)+count)%count]->TakeFocus();return true;
+                controls[(index+(event==Event::Tab?1:count-1)+count)%count]->TakeFocus();
+                if(show_modal)dialog_scroll_.RevealFocus();
+                else if(page==2)settings_scroll_.RevealFocus();
+                return true;
             }
             if(show_modal){if(event==Event::Escape){cancel();return true;}return false;}
             if(event==Event::F1){open_help();return true;}
-            auto switch_page=[&](int target){page=target;Components controls;focus_leaves(pages->ChildAt(page),controls);if(!controls.empty())controls.front()->TakeFocus();};
-            if(event==Event::F2){switch_page(0);return true;}if(event==Event::F3){switch_page(1);return true;}if(event==Event::F4){switch_page(2);return true;}
-            if(event==Event::F8){edit_features();return true;}
-            if(event==Event::F9){switch_page(4);return true;}
+            auto switch_page=[&](int target){page=target;Components controls;page_focus(controls);if(!controls.empty())controls.front()->TakeFocus();};
+            if(event==Event::F2){switch_page(0);return true;}if(event==Event::F3){switch_page(1);return true;}
+            if(event==Event::F4){settings_scroll_.Reset();switch_page(2);return true;}
+            if(event==Event::F8){switch_page(shortcuts_page_index);return true;}
+            if(event==Event::F9){switch_page(directories_page_index);return true;}
+            if(event==Event::Escape&&page==shortcuts_page_index){navigation->TakeFocus();return true;}
             if(event==Event::F6){switch_page(3);return true;}
             if(event==Event::F5){request({{"action","snapshot"},{"manual",true},{"connect",true}});return true;}
             return false;
         });
         auto interactive=root;
-        root=Renderer(interactive,[this,interactive]{Terminal::SetColorSupport(Terminal::TrueColor);modal_index_=std::max(0,modal_kind-1);return nord::canvas(interactive->Render());});
+        root=Renderer(interactive,[this,interactive]{
+            Terminal::SetColorSupport(Terminal::TrueColor);
+            if(show_modal||page!=2)settings_scroll_.ReleaseDrag();
+            modal_index_=std::max(0,modal_kind-1);
+            const auto view=std::pair{show_modal?modal_kind:0,modal_kind==6?feature_category:modal_kind==8?utility_kind:0};
+            if(view!=scroll_view_) {
+                dialog_scroll_.Reset();
+                scroll_view_=view;
+            }
+            return nord::canvas(interactive->Render());
+        });
     }
 private:
+    FormScroll dialog_scroll_;
+    FormScroll settings_scroll_;
+    std::pair<int,int> scroll_view_{};
     int modal_index_=0;
 };
 }
@@ -1473,10 +2055,10 @@ int verify_tui_components(const fs::path& artifacts) {
     ui.tr.set_language("en");ui.relabel();ui.tabs=initial_tabs;ui.rebuild_lists();
     for(const auto& lang:{std::string("en"),std::string("zh-CN")}) {
         ui.tr.set_language(lang);ui.relabel();ui.rebuild_lists();
-        for(int page=0;page<5;++page) {
+        for(int page=0;page<static_cast<int>(ui.page_labels.size());++page) {
             ui.page=page;auto content=render(lang+"-page-"+std::to_string(page));
             expect(content.find("Sinan")!=std::string::npos,"page renders");
-            expect(content.find(ui.tr[page==0?"tabs":page==1?"rules":page==2?"settings":"tools"])!=std::string::npos,"page translation renders");
+            expect(content.find(ui.page_labels[page])!=std::string::npos,"page translation renders");
             render(lang+"-narrow-page-"+std::to_string(page),72,30);
         }
         ui.page=0;ui.tab_menu->TakeFocus();
@@ -1544,7 +2126,7 @@ int verify_tui_components(const fs::path& artifacts) {
         expect(canvas.CellAt(0,0).background_color==nord::background,"Nord background fills terminal");
         expect(canvas.ToString().find("48;2;46;52;64")!=std::string::npos,"truecolor RGB escapes emitted");
         ui.search="no-matching-path";ui.rebuild_lists();
-        expect(render(lang+"-empty-table-"+std::to_string(width),width,36).find(ui.tr["title_column"])!=std::string::npos,"empty table retains headers");
+        expect(render(lang+"-empty-table-"+std::to_string(width),width,36).find(ui.tr["clear_tab_filters"])!=std::string::npos,"empty filtered table offers to clear its filters");
         ui.search.clear();
     }
     ui.tabs=original_tabs;ui.rebuild_lists();
@@ -1585,6 +2167,8 @@ int verify_tui_components(const fs::path& artifacts) {
     expect(ui.current_tab().is_null()&&ui.visible_ids.empty(),"poll clears tab details after Explorer exits");
     completion.snapshot["agent"]["tabs"]=next;ui.receive(completion);
     ui.search="客户甲";ui.rebuild_lists();expect(ui.visible_ids.size()==1&&ui.current_tab().at("tab_id")=="runtime.1","Unicode search");
+    ui.search="d:/pRoJeCtS 客户甲/SRC";ui.rebuild_lists();
+    expect(ui.visible_ids==std::vector<std::string>{"runtime.1"},"Case and slash insensitive multi-term search");
     Json submitted;ui.submit=[&](Json value){submitted=std::move(value);};ui.busy=false;
     ui.page=0;ui.root->OnEvent(Event::F4);ui.settings_controls->ChildAt(0)->TakeFocus();
     for(int i=0;i<8;++i)ui.root->OnEvent(Event::Tab);
@@ -1643,10 +2227,10 @@ int verify_tui_components(const fs::path& artifacts) {
     ui.show_modal=false;ui.busy=false;ui.feature_drafts.clear();ui.feature_active_key.clear();
     for(auto lang:{std::string("zh-CN"),std::string("en")}) {
         ui.tr.set_language(lang);ui.relabel();ui.feature_category=0;ui.feature_target=1;ui.load_feature_draft();ui.edit_features();
-        expect(ui.modal_kind==6&&ui.show_modal,"F8 editor opens protection and appearance");
+        expect(ui.modal_kind==6&&ui.show_modal,"Feature editor opens protection and appearance");
         ui.feature_font="Segoe UI";ui.feature_color="#123456";ui.feature_bold="false";ui.feature_bg[2]="#FFE0A0";ui.feature_text_state[5]="#E5E9F0";ui.feature_dirty=true;
         auto draft=ui.feature_style_draft();expect(draft["text"]["bold"]==false&&draft["dark"]["text"]["selected"]=="#E5E9F0","style form keeps false and themed text values");
-        ui.feature_category=1;ui.select_feature_draft();ui.feature_chord[0]="Ctrl+Alt+P";ui.feature_dirty=true;
+        ui.feature_category=1;ui.select_feature_draft();ui.feature_notification="off";ui.feature_dirty=true;
         ui.feature_category=0;ui.select_feature_draft();expect(ui.feature_color=="#123456"&&ui.feature_bg[2]=="#FFE0A0"&&ui.feature_dirty,"category switch restores unsaved style draft");
         ui.feature_target=3;ui.select_feature_draft();ui.feature_icon_color="#FF00CC";ui.feature_dirty=true;
         ui.feature_target=1;ui.select_feature_draft();expect(ui.feature_color=="#123456","target switch keeps independent draft");
@@ -1659,13 +2243,13 @@ int verify_tui_components(const fs::path& artifacts) {
         ui.feature_target=5;ui.select_feature_draft();ui.feature_rule_id="new-style";ui.feature_rule_patterns="D:\\Projects\\**";ui.feature_color="#223344";ui.feature_dirty=true;ui.busy=false;ui.apply_features();
         expect(submitted.at("value").at("rules").back().at("id")=="new-style","TUI creates directory appearance rules");
         ui.feature_editor->ChildAt(2)->ChildAt(0)->TakeFocus();render(lang+"-minimum-directory-style",72,24);
-        ui.feature_category=3;ui.select_feature_draft();ui.feature_max="20junk";ui.feature_dirty=true;ui.busy=false;auto previous_submission=submitted;ui.apply_features();
+        ui.feature_category=2;ui.select_feature_draft();ui.feature_max="20junk";ui.feature_dirty=true;ui.busy=false;auto previous_submission=submitted;ui.apply_features();
         expect(!ui.local_error.empty()&&submitted==previous_submission&&ui.feature_max=="20junk","invalid restore maximum is rejected without submitting or losing draft");
         ui.root->OnEvent(Event::Escape);ui.feature_drafts.clear();ui.feature_active_key.clear();
     }
     ui.show_modal=false;ui.busy=false;
     for(auto lang:{std::string("zh-CN"),std::string("en")}) {
-        ui.tr.set_language(lang);ui.relabel();ui.root->OnEvent(Event::F9);expect(ui.page==4,"F9 opens directory entries");
+        ui.tr.set_language(lang);ui.relabel();ui.root->OnEvent(Event::F9);expect(ui.page==Interface::directories_page_index,"F9 opens directory entries");
         auto content=render(lang+"-entries-empty",72,24);expect(content.find(ui.tr["pinned_position"])!=std::string::npos,"docking control visible at minimum size");
         expect(content.find("F9")!=std::string::npos,"fifth navigation key fits at minimum width");
         ui.edit_entry(true);ui.entry_id="work";ui.entry_name="开发";ui.entry_path="D:\\Projects\\Sinan";ui.entry_shortcut="Ctrl+Alt+1";ui.entry_descendants=true;ui.entry_title_mode=2;
@@ -1677,78 +2261,194 @@ int verify_tui_components(const fs::path& artifacts) {
         ui.busy=false;ui.dock_expected=nullptr;
     }
     {Interface empty(Config{},"en");empty.viewport_width=72;empty.viewport_height=24;Screen canvas(72,24);Render(canvas,empty.root->Render());expect(canvas.ToString().find("F9")!=std::string::npos,"empty snapshot renders all navigation entries");}
+    for(const auto& lang:{std::string("zh-CN"),std::string("en")}){
+        Interface fresh(Config{},lang);
+        fresh.viewport_width=72;fresh.viewport_height=24;
+        Json sent;fresh.submit=[&](Json value){sent=std::move(value);};
+        auto draw=[&]{Screen canvas(72,24);Render(canvas,fresh.root->Render());return canvas.ToString();};
+        auto button_named=[&](const char* key){
+            Component match;
+            std::function<void(Component)> find=[&](Component part){
+                if(auto button=std::dynamic_pointer_cast<ActionButton>(part);button&&button->label()==fresh.tr[key]){match=part;return;}
+                for(size_t i=0;!match&&i<part->ChildCount();++i)find(part->ChildAt(i));
+            };
+            find(fresh.root);expect(match!=nullptr,key);
+            return match;
+        };
+        auto output=draw();
+        expect(output.find(fresh.tr["offline"])!=std::string::npos&&output.find(fresh.tr["observe_start"])!=std::string::npos,
+            "Offline F2 offers observation while the footer shows the agent state");
+        fresh.agent={{"running",true},{"mode","observe"}};
+        expect(draw().find(fresh.tr["tab_empty_running"])!=std::string::npos,"Online F2 distinguishes an empty Explorer");
+        fresh.tabs={make_tab("runtime.1","D:\\Projects\\ClientA\\src","src"),make_tab("runtime.2","D:\\Projects\\ClientB\\src","src")};
+        fresh.rebuild_lists();output=draw();
+        expect(output.find("ClientA")!=std::string::npos&&output.find("ClientB")!=std::string::npos,"Same title tabs show distinguishable paths at 72 columns");
+        fresh.selected_tab=1;button_named("locate")->TakeFocus();fresh.root->OnEvent(Event::Return);
+        expect(sent.at("action")=="tabs.locate"&&sent.at("tab_id")=="runtime.2","Locate uses the selected tab among duplicate titles");
+        fresh.busy=false;
+        button_named("tab_more")->TakeFocus();fresh.root->OnEvent(Event::Return);draw();
+        expect(fresh.show_modal&&fresh.more_tab_id=="runtime.2","More actions are scoped to the selected tab");
+        auto disappeared=fresh.tabs;disappeared.erase(1);
+        fresh.receive({{{"action","snapshot"}},Json{},{{"config",config_json(fresh.config)},{"agent",{{"running",true},{"tabs",disappeared}}}}});
+        expect(!fresh.show_modal,"An open tab actions dialog closes if its target disappears");
+        button_named("tab_batch")->TakeFocus();fresh.root->OnEvent(Event::Return);
+        expect(fresh.page==3&&fresh.tools_group==0&&fresh.batch_choice->Focused()&&fresh.visible_ids.size()==1,
+            "F2 jumps directly to the batch controls with its filtered scope");
+        fresh.agent={{"running",true},{"mode","customize"},{"runtime_applied",false}};output=draw();
+        expect(output.find(fresh.tr["status_unconfirmed"])!=std::string::npos&&output.find(fresh.tr["disable"])!=std::string::npos&&
+            output.find(fresh.tr["enable"])==std::string::npos,"Status footer exposes only the applicable customization action");
+        button_named("disable")->TakeFocus();fresh.root->OnEvent(Event::Return);
+        expect(sent.at("action")=="stop","Status footer submits the state-dependent action");
+    }
     {
-        Interface fresh(Config{},"zh-CN");Json sent;fresh.submit=[&](Json value){sent=std::move(value);};fresh.page=4;fresh.edit_entry(true);fresh.entry_id="work";fresh.entry_name="开发";fresh.entry_path="D:\\Projects";fresh.entry_shortcut="Ctrl+Alt+1";fresh.apply_entry();
+        Interface fresh(Config{},"zh-CN");Json sent;fresh.submit=[&](Json value){sent=std::move(value);};fresh.root->OnEvent(Event::F9);fresh.edit_entry(true);fresh.entry_id="work";fresh.entry_name="开发";fresh.entry_path="D:\\Projects";fresh.entry_shortcut="Ctrl+Alt+1";fresh.apply_entry();
         Completion saved;saved.request=sent;saved.response={{"code",5},{"result",{{"saved",true},{"partial",true},{"agent",{{"directory_shortcuts",{{"errors",{{"work","Global directory shortcut is occupied: 热键已注册。 (1409)"}}}}}}}}}};
         auto next=fresh.config;next.features["directories"]=sent.at("value");saved.snapshot={{"config",config_json(next)},{"agent",{{"running",true},{"tabs",Json::array()}}}};
         fresh.receive(saved);Screen canvas(72,24);fresh.viewport_width=72;fresh.viewport_height=24;Render(canvas,fresh.root->Render());expect(!fresh.busy&&!fresh.show_modal&&fresh.notice_key=="partial","occupied global chord save response keeps TUI alive");
     }
     {
-        Interface fresh(Config{},"zh-CN");Json sent;fresh.submit=[&](Json value){sent=value;};fresh.edit_features();fresh.feature_category=1;fresh.select_feature_draft();
-        auto chord_input=fresh.feature_editor->ChildAt(1)->ChildAt(1)->ChildAt(0);chord_input->TakeFocus();
-        chord_input->OnEvent(Event::Character("Ctrl+Alt+2"));
-        Screen canvas(72,24);fresh.viewport_width=72;fresh.viewport_height=24;Render(canvas,fresh.root->Render());
-        fresh.apply_features();expect(sent.at("group")=="shortcuts","typed F8 shortcut submits expected group");
+        Interface fresh(Config{},"zh-CN");Json sent;fresh.submit=[&](Json value){sent=value;};
+        fresh.viewport_width=72;fresh.viewport_height=24;
+        fresh.root->OnEvent(Event::F8);
+        expect(fresh.page==Interface::shortcuts_page_index&&fresh.shortcut_menu->Focused(),"F8 focuses the shortcuts table");
+        auto draw=[&]{Screen canvas(72,24);Render(canvas,fresh.root->Render());return canvas;};
+        auto edit=[&](int index){
+            fresh.selected_shortcut=index;fresh.shortcut_menu->TakeFocus();draw();
+            fresh.root->OnEvent(Event::Return);draw();
+            expect(fresh.show_modal&&fresh.focused_shortcut()!=0,"Enter opens the selected shortcut editor");
+        };
+        edit(0);
+        fresh.shortcut_input->OnEvent(Event::Character("Ctrl+Alt+2"));
+        fresh.stage_shortcut();
+        const auto new_file=std::find(explorer_shortcut_keys.begin(),explorer_shortcut_keys.end(),std::string_view("new_file"))-explorer_shortcut_keys.begin();
+        edit(static_cast<int>(new_file));
+        fresh.capture_shortcut({fresh.focused_shortcut(),"Ctrl+Alt+2"});
+        fresh.stage_shortcut();
+        expect(fresh.shortcut_conflicts()[0]&&fresh.shortcut_conflicts()[new_file],"Both duplicate bindings are flagged");
+        expect(draw().ToString().find(fresh.tr["shortcut_conflict_row"])!=std::string::npos,"Conflicts appear on the shortcut table");
+        edit(static_cast<int>(new_file));
+        fresh.capture_shortcut({fresh.focused_shortcut(),"Ctrl+Alt+Shift+F11"});
+        fresh.stage_shortcut();
+        fresh.apply_shortcuts();
+        expect(sent.at("group")=="shortcuts"&&sent.at("value").at("new_file")=="Ctrl+Alt+Shift+F11","F8 saves the new file shortcut in the expected field");
+
         Completion saved;saved.request=sent;saved.response={{"code",0},{"result",{{"saved",true}}}};
-        auto next=fresh.config;next.features["shortcuts"]=sent.at("value");saved.snapshot={{"config",config_json(next)},{"agent",{{"running",true},{"tabs",Json::array()}}}};
-        fresh.receive(saved);Render(canvas,fresh.root->Render());expect(!fresh.busy&&fresh.show_modal&&fresh.feature_chord[0]=="Ctrl+Alt+2","typed F8 shortcut save and reload stays alive");
+        auto saved_config=fresh.config;saved_config.features["shortcuts"]=sent.at("value");
+        saved.snapshot={{"config",config_json(saved_config)},{"agent",{{"running",true},{"tabs",Json::array()}}}};
+        fresh.receive(saved);
+        expect(!fresh.busy&&!fresh.show_modal&&fresh.shortcut_chords[0]=="Ctrl+Alt+2"&&
+            fresh.shortcut_draft()==fresh.shortcut_expected,"Successful save adopts the new shortcut baseline");
+
+        edit(0);fresh.capture_shortcut({1,"Ctrl+Alt+3"});fresh.stage_shortcut();
+        fresh.root->OnEvent(Event::F6);
+        auto external=saved_config;
+        external.features["shortcuts"][explorer_shortcut_keys[0]]="Ctrl+Alt+4";
+        auto external_snapshot=saved.snapshot;
+        external_snapshot["config"]=config_json(external);
+        fresh.receive({{{"action","snapshot"}},Json{},external_snapshot});
+        fresh.root->OnEvent(Event::F8);
+        fresh.apply_shortcuts();
+        expect(sent.at("expected")==saved_config.features.at("shortcuts")&&
+            sent.at("value").at(explorer_shortcut_keys[0])=="Ctrl+Alt+3","Polling preserves the unsaved draft and its original baseline");
+        fresh.receive({sent,{{"code",2},{"result",{{"saved",false},{"conflict","shortcuts"}}}},external_snapshot});
+        expect(!fresh.shortcut_error.empty()&&fresh.shortcut_chords[0]=="Ctrl+Alt+3","Save conflicts leave the shortcut draft available");
+        auto reload=fresh.shortcut_actions->ChildAt(0)->ChildAt(1);
+        reload->TakeFocus();fresh.root->OnEvent(Event::Return);
+        expect(fresh.shortcut_error.empty()&&fresh.shortcut_chords[0]=="Ctrl+Alt+4","Reload adopts the latest saved settings");
     }
     for(auto field:{1,4}) {
         Interface fresh(Config{},"en");fresh.viewport_width=72;fresh.viewport_height=24;
-        if(field==1){fresh.edit_features();fresh.feature_category=1;fresh.select_feature_draft();}else fresh.edit_entry(true);
-        fresh.shortcut_inputs[field-1]->TakeFocus();Screen canvas(72,24);Render(canvas,fresh.root->Render());
+        if(field==1){fresh.root->OnEvent(Event::F8);fresh.edit_shortcut();}
+        else {fresh.edit_entry(true);fresh.directory_chord_input->TakeFocus();}
+        Screen canvas(72,24);Render(canvas,fresh.root->Render());
         expect(fresh.focused_shortcut()==field,"recorder recognizes focused F8/F9 input");
         expect(fresh.root->OnEvent(Event::CtrlQ),"Ctrl+Q captured in shortcut field");
-        expect((field==4?fresh.entry_shortcut:fresh.feature_chord[0])=="Ctrl+Q"&&fresh.show_modal,"Ctrl+Q records chord instead of exiting");
+        const auto& chord=field==4?fresh.entry_shortcut:fresh.edited_chord;
+        expect(chord=="Ctrl+Q","Ctrl+Q records chord instead of exiting");
         expect(fresh.root->OnEvent(Event::CtrlC),"Ctrl+C marked handled before terminal signal path");
-        expect((field==4?fresh.entry_shortcut:fresh.feature_chord[0])=="Ctrl+C","Ctrl+C records chord instead of raising SIGINT");
-        fresh.capture_shortcut({field,"Ctrl+Alt+1"});expect((field==4?fresh.entry_shortcut:fresh.feature_chord[0])=="Ctrl+Alt+1","native recorded combination updates input");
-        fresh.capture_shortcut({field,"Ctrl+W"});expect(!fresh.local_error.empty()&&(field==4?fresh.entry_shortcut:fresh.feature_chord[0])=="Ctrl+Alt+1","reserved combination reports error and retains previous input");
+        expect(chord=="Ctrl+C","Ctrl+C records chord instead of raising SIGINT");
+        fresh.capture_shortcut({field,"Ctrl+Alt+1"});expect(chord=="Ctrl+Alt+1","native recorded combination updates input");
+        fresh.capture_shortcut({field,"Ctrl+W"});expect(!fresh.local_error.empty()&&chord=="Ctrl+Alt+1","reserved combination reports error and retains previous input");
         fresh.root->OnEvent(Event::Escape);expect(!fresh.show_modal&&fresh.focused_shortcut()==0,"Esc exits shortcut capture");
-        fresh.capture_shortcut({field,"Ctrl+Alt+2"});expect((field==4?fresh.entry_shortcut:fresh.feature_chord[0])=="Ctrl+Alt+1","queued capture cannot modify closed editor");
+        fresh.capture_shortcut({field,"Ctrl+Alt+2"});expect(chord=="Ctrl+Alt+1","queued capture cannot modify an unfocused editor");
+        if(field==1)expect(fresh.shortcut_menu->Focused()&&fresh.shortcut_chords[0].empty(),"Esc returns to the row and discards its edits");
+    }
+    for(const auto& lang:{std::string("zh-CN"),std::string("en")})for(int width:{72,110}) {
+        Interface fresh(Config{},lang);
+        fresh.viewport_width=width;fresh.viewport_height=width==72?24:36;
+        Json sent;fresh.submit=[&](Json request){sent=std::move(request);};
+        fresh.root->OnEvent(Event::F8);
+        auto draw=[&]{
+            Screen canvas(width,fresh.viewport_height);Render(canvas,fresh.root->Render());return canvas;
+        };
+        auto canvas=draw();
+        expect(canvas.ToString().find(fresh.tr["shortcut_scope_explorer"])!=std::string::npos,"Shortcut table starts with Explorer bindings");
+        fresh.root->OnEvent(Event::End);canvas=draw();
+        expect(canvas.ToString().find(fresh.tr["shortcut_scope_global"])!=std::string::npos,"End reveals the global shortcut");
+        expect(canvas.ToString().find(fresh.tr["save_shortcuts"])!=std::string::npos,"Save stays visible while the table scrolls");
+        fresh.root->OnEvent(Event::Return);draw();
+        expect(fresh.show_modal&&fresh.focused_shortcut()>0,"Global row is editable");
+        fresh.capture_shortcut({fresh.focused_shortcut(),"Ctrl+Alt+Shift+F20"});
+        fresh.stage_shortcut();
+        fresh.selected_shortcut=7;fresh.edit_shortcut();canvas=draw();
+        expect(canvas.ToString().find(fresh.tr["folder_preset"])!=std::string::npos,"Folder preset is available only in its binding editor");
+        fresh.edited_folder_preset="assets";fresh.stage_shortcut();
+        fresh.apply_shortcuts();
+        expect(sent.at("value").at("locate_clipboard_global")=="Ctrl+Alt+Shift+F20"&&
+            sent.at("value").at("new_folder_name")=="assets","TUI saves global action chord and folder preset");
     }
     for(const auto& lang:{std::string("zh-CN"),std::string("en")})for(int width:{72,110,180,260}){
         Interface fresh(Config{},lang);fresh.tabs=initial_tabs;fresh.rebuild_lists();fresh.page=3;
         fresh.viewport_width=width;fresh.viewport_height=width>=180?52:24;
-        Json sent;fresh.submit=[&](Json value){sent=std::move(value);};fresh.tools_controls->ChildAt(0)->TakeFocus();
+        Json sent;fresh.submit=[&](Json value){sent=std::move(value);};fresh.tools_selector->TakeFocus();
         auto paint=[&](const std::string& suffix){Screen canvas(width,fresh.viewport_height);Render(canvas,fresh.root->Render());
             save_cells(lang+"-tools-cards-"+std::to_string(width)+suffix,canvas);return canvas.ToString();};
         auto output=paint("");expect(output.find(fresh.tr["tools_batch_title"])!=std::string::npos,"tools page starts with localized batch card");
         expect(output.find("pin / protect / lock")==std::string::npos&&output.find("on / off")==std::string::npos,"batch page replaces command text inputs with translated choices");
-        if(width>=180)expect(output.find(fresh.tr["tools_maintenance_title"])!=std::string::npos&&output.find(fresh.tr["runtime_summary"])!=std::string::npos,"large tools layout shows maintenance and runtime in compact cards");
-        Components controls;focus_leaves(fresh.tools_controls,controls);
-        expect(controls.size()==21,"tools controls expose one focus stop per choice or action");
-        for(size_t i=0;i<controls.size();++i){controls[i]->TakeFocus();output=paint("-focus-"+std::to_string(i));
-            if(auto button=std::dynamic_pointer_cast<ActionButton>(controls[i]))expect(output.find(button->label())!=std::string::npos,"every tools action scrolls fully into view at minimum size");
+        for(int group=0;group<4;++group){
+            fresh.tools_group=group;
+            Components controls;focus_leaves(fresh.tool_groups[group],controls);
+            for(size_t i=0;i<controls.size();++i){
+                controls[i]->TakeFocus();output=paint("-group-"+std::to_string(group)+"-focus-"+std::to_string(i));
+                if(auto button=std::dynamic_pointer_cast<ActionButton>(controls[i]))
+                    expect(output.find(button->label())!=std::string::npos,("every action in the active tool group is visible on focus: "+button->label()).c_str());
+            }
         }
+        fresh.tools_group=0;
+        auto batch_apply=fresh.tool_groups[0]->ChildAt(2);
         for(int operation=0;operation<3;++operation)for(int state=0;state<2;++state){
             fresh.batch_operation=operation;fresh.batch_state=state;fresh.search="客户甲";fresh.rebuild_lists();
-            fresh.tools_controls->ChildAt(2)->TakeFocus();fresh.root->OnEvent(Event::Return);
+            batch_apply->TakeFocus();fresh.root->OnEvent(Event::Return);
             expect(fresh.show_modal&&fresh.confirmation.at("tab_ids")==Json::array({"runtime.1"})&&fresh.confirmation.at("enabled")==bool(state),"batch confirmation freezes filtered IDs and target state");
             expect(fresh.confirmation.at("operation")==std::vector<std::string>{"pin","protect","lock"}.at(operation),"batch choice maps all protection operations correctly");
             fresh.root->OnEvent(Event::Return);expect(!fresh.show_modal&&sent.is_null(),"batch confirmation defaults to cancel without sending");
         }
-        fresh.tools_controls->ChildAt(2)->TakeFocus();fresh.root->OnEvent(Event::Return);fresh.root->OnEvent(Event::TabReverse);fresh.root->OnEvent(Event::Return);
+        batch_apply->TakeFocus();fresh.root->OnEvent(Event::Return);fresh.root->OnEvent(Event::TabReverse);fresh.root->OnEvent(Event::Return);
         expect(sent.at("action")=="tabs.batch"&&sent.at("tab_ids").size()==1,"explicit batch confirm submits the reviewed filtered IDs");
         fresh.busy=false;sent=nullptr;fresh.search="no-match";fresh.rebuild_lists();
-        fresh.tools_controls->ChildAt(2)->OnEvent(Event::Return);expect(sent.is_null()&&!fresh.show_modal&&!fresh.tools_controls->ChildAt(2)->Focusable(),"empty filtered batch is disabled and cannot open confirmation");
+        batch_apply->OnEvent(Event::Return);expect(sent.is_null()&&!fresh.show_modal&&!batch_apply->Focusable(),"empty filtered batch is disabled and cannot open confirmation");
         fresh.search.clear();fresh.rebuild_lists();
-        for(int i=0;i<3;++i){auto button=fresh.tools_controls->ChildAt(3)->ChildAt(0)->ChildAt(i);button->TakeFocus();fresh.root->OnEvent(Event::Return);
+        fresh.tools_group=1;
+        for(int i=0;i<3;++i){auto button=fresh.tool_groups[1]->ChildAt(0)->ChildAt(i);button->TakeFocus();fresh.root->OnEvent(Event::Return);
             expect(sent.at("action")==std::vector<std::string>{"workspace.save","workspace.restore","workspace.show"}.at(i),"workspace action submits its corresponding command");fresh.busy=false;sent=nullptr;}
-        fresh.tools_controls->ChildAt(4)->ChildAt(0)->ChildAt(0)->TakeFocus();fresh.root->OnEvent(Event::Return);
+        fresh.tools_group=3;
+        fresh.tool_groups[3]->ChildAt(0)->ChildAt(0)->ChildAt(0)->TakeFocus();fresh.root->OnEvent(Event::Return);
         expect(sent.at("action")=="doctor","diagnostics retains original request behavior");fresh.busy=false;sent=nullptr;
-        fresh.tools_controls->ChildAt(4)->ChildAt(0)->ChildAt(1)->TakeFocus();fresh.root->OnEvent(Event::Return);
+        fresh.tool_groups[3]->ChildAt(0)->ChildAt(0)->ChildAt(1)->TakeFocus();fresh.root->OnEvent(Event::Return);
         expect(fresh.show_modal&&fresh.modal_kind==4,"tools help opens the redesigned help dialog");fresh.root->OnEvent(Event::Escape);
-        fresh.tools_controls->ChildAt(4)->ChildAt(0)->ChildAt(2)->TakeFocus();fresh.root->OnEvent(Event::Return);
+        fresh.tool_groups[3]->ChildAt(0)->ChildAt(0)->ChildAt(2)->TakeFocus();fresh.root->OnEvent(Event::Return);
         expect(fresh.show_modal&&fresh.modal_kind==6,"tools feature settings opens the redesigned feature editor");fresh.root->OnEvent(Event::Escape);
-        for(int i=0;i<2;++i){fresh.tools_controls->ChildAt(5)->ChildAt(0)->ChildAt(i)->TakeFocus();fresh.root->OnEvent(Event::Return);
+        for(int i=0;i<2;++i){fresh.tool_groups[3]->ChildAt(1)->ChildAt(0)->ChildAt(i)->TakeFocus();fresh.root->OnEvent(Event::Return);
             expect(fresh.show_modal&&fresh.modal_kind==3&&fresh.confirm_cancel_button->Focused(),"maintenance actions require confirmation with cancel focused");
             expect(fresh.confirmation.at("action")==std::string(i==0?"restart":"agent.stop"),"maintenance confirmation preserves command identity");
             fresh.root->OnEvent(Event::Escape);expect(sent.is_null(),"closing maintenance confirmation does not execute it");}
-        fresh.tools_controls->ChildAt(0)->TakeFocus();fresh.batch_operation=1;fresh.root->OnEvent(Event::ArrowRight);fresh.root->OnEvent(Event::Tab);fresh.root->OnEvent(Event::ArrowLeft);
+        fresh.tools_selector->TakeFocus();fresh.root->OnEvent(Event::ArrowRight);
+        expect(fresh.tools_group==0,"Arrow keys switch tool groups without selecting hidden controls");
+        fresh.root->OnEvent(Event::Tab);
+        fresh.batch_operation=1;fresh.root->OnEvent(Event::ArrowRight);fresh.root->OnEvent(Event::Tab);fresh.root->OnEvent(Event::ArrowLeft);
         expect(fresh.batch_operation==2&&fresh.batch_state==0,"batch choice keyboard selection and Tab follow the visible order");
         fresh.root->OnEvent(Event::F7);expect(fresh.batch_operation==2&&fresh.batch_state==0,"language switch preserves selected batch operation and state");
-        fresh.busy=true;expect(!fresh.tools_controls->ChildAt(2)->Focusable(),"pending request disables batch submission");
+        fresh.busy=true;expect(!batch_apply->Focusable(),"pending request disables batch submission");
     }
     for(const auto& lang:{std::string("zh-CN"),std::string("en")})for(int width:{72,110,180,260}){
         Interface fresh(Config{},lang);fresh.tabs=initial_tabs;fresh.rebuild_lists();fresh.page=2;
@@ -1757,6 +2457,40 @@ int verify_tui_components(const fs::path& artifacts) {
         auto paint=[&](const std::string& suffix){Screen canvas(width,fresh.viewport_height);Render(canvas,fresh.root->Render());
             save_cells(lang+"-settings-dashboard-"+std::to_string(width)+suffix,canvas);return canvas;};
         auto canvas=paint("");bool focus_border=false;
+        if(width==72||width==180) {
+            auto render_settings=[&] {
+                Screen view(width,fresh.viewport_height);
+                Render(view,fresh.root->Render());
+                return view.ToString();
+            };
+            const auto first=canvas.ToString();
+            expect(first.find(fresh.tr["tray_title"])==std::string::npos,"settings start above the final card");
+            int scrollbar_x=-1,scrollbar_bottom=-1;
+            for(int y=0;y<fresh.viewport_height;++y)for(int x=0;x<width;++x)
+                if(canvas.at(x,y)=="┃"||canvas.at(x,y)=="│"){
+                    scrollbar_x=x;scrollbar_bottom=y;
+                }
+            expect(scrollbar_x>0,"settings show a scrollbar when cards overflow");
+            Mouse mouse;
+            mouse.x=scrollbar_x-1;mouse.y=scrollbar_bottom;
+            mouse.button=Mouse::WheelDown;mouse.motion=Mouse::Pressed;
+            expect(fresh.root->OnEvent(Event::Mouse("",mouse))&&render_settings()!=first,"settings scroll with the mouse wheel");
+            mouse.button=Mouse::WheelUp;
+            expect(fresh.root->OnEvent(Event::Mouse("",mouse))&&render_settings()==first,"wheel up returns settings to the top");
+            mouse.button=Mouse::Left;mouse.x=scrollbar_x;
+            expect(fresh.root->OnEvent(Event::Mouse("",mouse))&&render_settings()!=first,"clicking the settings scrollbar pages down");
+            fresh.root->OnEvent(Event::PageDown);
+            auto bottom=render_settings();
+            for(int i=0;i<5&&bottom.find(fresh.tr["tray_show"])==std::string::npos;++i){
+                fresh.root->OnEvent(Event::PageDown);
+                bottom=render_settings();
+            }
+            if(bottom.find(fresh.tr["tray_show"])==std::string::npos)
+                atomic_write(artifacts/L"settings-scroll-failure.txt",bottom);
+            expect(bottom.find(fresh.tr["tray_show"])!=std::string::npos,"Page Down reaches the tray control");
+            for(int i=0;i<6;++i){fresh.root->OnEvent(Event::PageUp);render_settings();}
+            expect(render_settings()==first&&fresh.settings_controls->ChildAt(0)->Focused(),"Page Up returns to the top without changing focus");
+        }
         for(int y=0;y<canvas.dimy();++y)for(int x=0;x<canvas.dimx();++x)
             if(canvas.at(x,y)=="╭"&&canvas.CellAt(x,y).foreground_color==nord::cyan)focus_border=true;
         expect(focus_border,"global depth uses the shared rounded focused input");
@@ -1785,6 +2519,33 @@ int verify_tui_components(const fs::path& artifacts) {
         for(size_t i=0;i<controls.size();++i){controls[i]->TakeFocus();paint("-focus-"+std::to_string(i));expect(controls[i]->Focused(),"settings controls preserve a single keyboard focus in card layouts");}
         fresh.settings_controls->ChildAt(5)->TakeFocus();
         expect(paint("-language").ToString().find(fresh.tr["save_language"])!=std::string::npos,"language action scrolls into view in the minimum viewport");
+        auto startup_toggle=fresh.settings_controls->ChildAt(10)->ChildAt(0)->ChildAt(0);
+        startup_toggle->TakeFocus();
+        expect(paint("-startup").ToString().find(fresh.tr["startup_enable"])!=std::string::npos,"sign-in startup is reachable in Settings");
+        fresh.root->OnEvent(Event::Return);
+        expect(sent.at("action")=="startup.set"&&sent.at("enabled")==true,"Settings turns on sign-in startup");
+        auto signed_in_config=fresh.config;signed_in_config.autostart=true;
+        fresh.receive({sent,{{"code",0},{"result",Json::object()}},{{"config",config_json(signed_in_config)},{"agent",Json::object()},
+            {"startup",{{"login_registered",true},{"requested",true}}}}});
+        startup_toggle->TakeFocus();
+        expect(paint("-startup-registered").ToString().find(fresh.tr["startup_disable"])!=std::string::npos,"successful registration exposes the inverse action");
+        fresh.root->OnEvent(Event::Return);
+        expect(sent.at("action")=="startup.set"&&sent.at("enabled")==false,"Settings turns off sign-in startup");
+        fresh.busy=false;
+        auto tray_toggle=fresh.settings_controls->ChildAt(11);
+        tray_toggle->TakeFocus();
+        expect(paint("-tray").ToString().find(fresh.tr["tray_show"])!=std::string::npos,"tray toggle scrolls into view");
+        fresh.root->OnEvent(Event::Return);
+        expect(sent.at("action")=="tray.set"&&sent.at("enabled")==true,"Settings shows the tray icon");
+        signed_in_config.show_tray_icon=true;
+        fresh.receive({sent,{{"code",0},{"result",{{"registered",true}}}},{{"config",config_json(signed_in_config)},
+            {"agent",{{"running",true},{"tray",{{"registered",true}}}}}}});
+        tray_toggle->TakeFocus();
+        const auto tray_page=paint("-tray-registered").ToString();
+        expect(tray_page.find(fresh.tr["tray_hide"])!=std::string::npos&&
+            tray_page.find(fresh.tr["tray_registered"])!=std::string::npos,"Settings displays tray registration and hide action");
+        fresh.root->OnEvent(Event::Return);
+        expect(sent.at("action")=="tray.set"&&sent.at("enabled")==false,"Settings hides the tray icon");
     }
     {
         Interface fresh(Config{},"en");fresh.viewport_width=72;fresh.viewport_height=24;
@@ -1828,7 +2589,7 @@ int verify_tui_components(const fs::path& artifacts) {
         fresh.root->OnEvent(Event::Escape);fresh.test_result={{"path","D:\\Projects\\src"},{"source","global"},{"depth",2},{"preview_title","Projects\\src"},{"action","depth"}};
         fresh.diagnostic_result=false;fresh.modal_kind=5;fresh.show_modal=true;std::static_pointer_cast<FormDocument>(fresh.result_document)->Reset();fresh.result_document->TakeFocus();
         check_footer(paint("test-result"),"test","close_dialog");fresh.root->OnEvent(Event::Escape);
-        for(int category=0;category<4;++category){
+        for(int category=0;category<3;++category){
             fresh.feature_category=category;fresh.edit_features();
             check_footer(paint("features-"+std::to_string(category)),"features","feature_apply");
             auto active=fresh.feature_editor->ChildAt(1)->ChildAt(category);Components controls;focus_leaves(active,controls);
@@ -1853,13 +2614,13 @@ int verify_tui_components(const fs::path& artifacts) {
         fresh.viewport_width=width;fresh.viewport_height=width==72?24:36;Json sent;
         fresh.submit=[&](Json value){sent=std::move(value);};
         auto paint=[&](const std::string& name){Screen canvas(width,fresh.viewport_height);Render(canvas,fresh.root->Render());save_cells(lang+"-coverage-"+std::to_string(width)+"-"+name,canvas);return canvas.ToString();};
-        fresh.tools_controls->ChildAt(6)->ChildAt(0)->TakeFocus();
+        fresh.tools_group=3;fresh.inspection_controls->ChildAt(0)->TakeFocus();
         expect(paint("inspection").find(fresh.tr["inspect_run"])!=std::string::npos,"inspection choices and run action fit in the tools viewport");
         for(int i=0;i<8;++i){fresh.inspect_kind=i;fresh.busy=false;sent=nullptr;fresh.inspect();
             if(i==3){expect(fresh.show_modal&&fresh.modal_kind==5&&fresh.test_result==fresh.config.features.at("tab_style"),"saved style report is available without an agent");fresh.root->OnEvent(Event::Escape);}
             else{expect(sent.value("show_result",false),"inspection request opens results including partial reports");if(i>=5)expect(sent.at("tab_id")==initial_tabs[0].at("tab_id"),"tab inspection uses the selected tab identity");}
         }
-        for(int i=0;i<3;++i){fresh.busy=false;sent=nullptr;auto control=fresh.tools_controls->ChildAt(8)->ChildAt(0)->ChildAt(i);control->TakeFocus();paint("symbols-"+std::to_string(i));control->OnEvent(Event::Return);
+        for(int i=0;i<3;++i){fresh.busy=false;sent=nullptr;auto control=fresh.tool_groups[3]->ChildAt(4)->ChildAt(0)->ChildAt(i);control->TakeFocus();paint("symbols-"+std::to_string(i));control->OnEvent(Event::Return);
             expect(sent.value("show_result",false)&&!sent.contains("tab_id")&&sent.at("action")==Json(i==0?"symbols.status":"symbols.prepare"),"symbol actions do not require a selected tab");
             expect(sent.value("offline",false)==(i==2),"only offline symbol action forbids network");}
         fresh.busy=false;fresh.tabs=Json::array();fresh.rebuild_lists();sent=nullptr;fresh.inspect_kind=5;fresh.inspect();expect(sent.is_null(),"tab-specific report cannot submit without a selected tab");
@@ -1883,9 +2644,9 @@ int verify_tui_components(const fs::path& artifacts) {
         install_actions->ChildAt(1)->TakeFocus();fresh.root->OnEvent(Event::Return);expect(sent.at("action")=="path.status","custom context still permits read-only PATH status");
         fresh.busy=false;sent=nullptr;management->ChildAt(3)->TakeFocus();fresh.root->OnEvent(Event::Return);
         expect(fresh.confirmation.at("action")=="display.reset"&&fresh.confirmation.at("revision")==fresh.config.revision,"display reset requires confirmation and revision check");fresh.root->OnEvent(Event::Escape);
-        fresh.feature_category=2;fresh.edit_features();auto notifications=fresh.feature_editor->ChildAt(1)->ChildAt(2);notifications->TakeFocus();paint("notifications");fresh.root->OnEvent(Event::ArrowRight);fresh.apply_features();
+        fresh.feature_category=1;fresh.edit_features();auto notifications=fresh.feature_editor->ChildAt(1)->ChildAt(1);notifications->TakeFocus();paint("notifications");fresh.root->OnEvent(Event::ArrowRight);fresh.apply_features();
         expect(sent.at("value").at("mode")=="errors","notification selection saves the typed enum without text entry");fresh.busy=false;fresh.root->OnEvent(Event::Escape);
-        fresh.feature_category=3;fresh.edit_features();auto restore=fresh.feature_editor->ChildAt(1)->ChildAt(3);restore->ChildAt(0)->TakeFocus();paint("restore");fresh.root->OnEvent(Event::ArrowRight);fresh.feature_max="25";fresh.apply_features();
+        fresh.feature_category=2;fresh.edit_features();auto restore=fresh.feature_editor->ChildAt(1)->ChildAt(2);restore->ChildAt(0)->TakeFocus();paint("restore");fresh.root->OnEvent(Event::ArrowRight);fresh.feature_max="25";fresh.apply_features();
         expect(sent.at("value").at("automatic")==true&&sent.at("value").at("max_tabs")==25,"automatic restore selection and numeric limit submit correct types");fresh.busy=false;fresh.root->OnEvent(Event::Escape);
         fresh.config.features["tab_style"]["rules"]=Json::array({{{"id","sensitive"},{"name","Case rule"},{"patterns",Json::array({"D:\\Projects\\**"})},{"match","glob"},{"enabled",true},{"case_sensitive",true},{"style",Json::object()}}});
         auto second_rule=fresh.config.features["tab_style"]["rules"][0];second_rule["id"]="second";second_rule["name"]="Second rule";second_rule["case_sensitive"]=false;fresh.config.features["tab_style"]["rules"].push_back(second_rule);
@@ -1922,6 +2683,44 @@ int verify_tui_components(const fs::path& artifacts) {
     {
         Interface fresh(Config{},"en");fresh.entry_shortcut="Ctrl+Alt+1";Completion malformed;malformed.request={{"action","snapshot"}};malformed.snapshot={{"config",config_json(Config{})},{"agent",{{"tabs",false}}}};
         fresh.receive(malformed);expect(fresh.notice_key=="failed"&&!fresh.local_error.empty()&&fresh.entry_shortcut=="Ctrl+Alt+1","invalid response is shown without closing TUI or losing input");
+    }
+    for(const std::string lang:{"en","zh-CN"}) {
+        Interface fresh(Config{},lang);
+        Json sent;
+        fresh.submit=[&](Json value){sent=std::move(value);};
+        fresh.agent={{"running",true}};
+        fresh.tabs=initial_tabs;
+        fresh.rebuild_lists();
+        fresh.root->OnEvent(Event::F6);
+        fresh.tools_group=2;fresh.tool_groups[2]->ChildAt(1)->TakeFocus();
+        fresh.root->OnEvent(Event::Return);
+        expect(fresh.modal_kind==9&&fresh.script_add_button->Focused(),"F6 opens script actions");
+        fresh.root->OnEvent(Event::Return);
+        Screen canvas(80,28);
+        Render(canvas,fresh.root->Render());
+        expect(fresh.modal_kind==10&&canvas.ToString().find(fresh.tr["script_save"])!=std::string::npos,
+               "localized editor exposes the save button");
+        fresh.script_chord_input->TakeFocus();
+        expect(fresh.focused_shortcut()==Interface::script_shortcut_field,"script shortcut field arms the shared recorder");
+        fresh.capture_shortcut({Interface::script_shortcut_field,"Ctrl+Alt+Shift+F18"});
+        fresh.script_id="context";
+        fresh.script_name="Read context";
+        fresh.script_path="D:\\My Scripts\\context.ps1";
+        fresh.script_scope="explorer";
+        fresh.save_script();
+        expect(sent.at("action")=="features.save"&&sent.at("group")=="scripts"&&
+            sent.at("value").at("entries").at(0).at("shortcut")=="Ctrl+Alt+Shift+F18","script settings are saved together");
+        auto updated=fresh.config;
+        updated.features["scripts"]=sent.at("value");
+        Completion saved;
+        saved.request=sent;
+        saved.response={{"code",0},{"result",{{"saved",true}}}};
+        saved.snapshot={{"config",config_json(updated)},{"agent",{{"running",true},{"tabs",initial_tabs}}}};
+        fresh.receive(saved);
+        expect(fresh.modal_kind==9&&fresh.has_script(),"saving returns to the registered script list");
+        fresh.run_script();
+        expect(sent.at("action")=="actions.execute"&&sent.at("id")=="script.context"&&
+            sent.at("parameters").at("tab_id")==fresh.current_tab().at("tab_id"),"TUI sends the selected tab to the shared script action");
     }
     auto en=Messages("en")["apply"],zh=Messages("zh-CN")["apply"];expect(en=="Apply"&&zh=="应用设置","translation catalog");
     std::cout<<checks<<" TUI component checks passed; artifacts: "<<utf8(artifacts.wstring())<<'\n';return 0;

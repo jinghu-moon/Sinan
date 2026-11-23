@@ -5,15 +5,15 @@
 #include <tuple>
 
 namespace sinan {
-// Width is global, so one lease per Explorer UI thread controls its tab strip(s).
+// One lease per Explorer UI thread controls the XAML elements on that thread.
 class LayoutTracker {
     using Key = std::tuple<DWORD,uint64_t,DWORD>;
     std::map<Key,NativeTab> controlled_;
 public:
-    using Transport = std::function<Json(const NativeTab&,LayoutAction,const TabAppearance&)>;
+    using Transport = std::function<Json(const NativeTab&,LayoutAction,const LayoutOptions&)>;
     using Thread = std::function<DWORD(HWND)>;
     using Probe = std::function<ProcessLifetime(DWORD,uint64_t)>;
-    Json synchronize(const std::vector<NativeTab>& observed, bool enabled, const TabAppearance& appearance,
+    Json synchronize(const std::vector<NativeTab>& observed, const LayoutOptions& options,
         const Transport& transport = send_layout_request,
         const Thread& thread = [](HWND window){return GetWindowThreadProcessId(window,nullptr);},
         const Probe& probe = process_lifetime);

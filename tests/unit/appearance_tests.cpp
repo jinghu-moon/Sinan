@@ -17,8 +17,16 @@ int main(){
             expect(store.load().tabs==c.tabs,"TOML appearance round trip");
             expect(config_from_json(config_json(c)).tabs==c.tabs,"IPC appearance round trip");
         }
-        auto legacy=config_json(c);legacy.erase("appearance");expect(config_from_json(legacy).tabs==TabAppearance{},"old config defaults to system");
-        for(auto key:{"shortcuts","notifications","tab_behavior","tab_style","restore","directories"})legacy.erase(key);legacy["schema_version"]=1;legacy.erase("ui");legacy.erase("rules");expect(config_from_json(legacy).tabs.width_mode=="system","schema1 compatible");
+        auto legacy=config_json(c);legacy["appearance"].erase("search_box_hidden");
+        expect(!config_from_json(legacy).search_box_hidden,"existing config leaves the search box visible");
+        legacy.erase("appearance");expect(config_from_json(legacy).tabs==TabAppearance{},"old config defaults to system");
+        legacy.erase("archives");
+        legacy["shortcuts"].erase("extract_archive");
+        const auto upgraded=config_from_json(legacy);
+        expect(upgraded.features.at("archives").at("tools").empty()&&
+            !upgraded.features.at("archives").at("recycle").get<bool>()&&
+            upgraded.features.at("shortcuts").at("extract_archive")=="" ,"legacy archive defaults");
+        for(auto key:{"shortcuts","notifications","tab_behavior","tab_style","restore","directories","scripts"})legacy.erase(key);legacy["schema_version"]=1;legacy.erase("ui");legacy.erase("rules");expect(config_from_json(legacy).tabs.width_mode=="system","schema1 compatible");
         for(auto mode:{"SYSTEM","auto","invalid"})rejects([&]{appearance_from_json({{"width_mode",mode}});});
         for(auto number:{Json(79),Json(1001),Json(320.5),Json("320"),Json(true),Json(nullptr),Json(UINT64_MAX)})
             for(auto key:{"width","min_width","max_width"})rejects([&]{appearance_from_json({{key,number}});});
@@ -72,15 +80,17 @@ int main(){
         NativeTab duplicate=a;duplicate.browser_window=reinterpret_cast<HWND>(99);
         NativeTab b=a;b.window=reinterpret_cast<HWND>(2);
         int calls=0,applies=0,restores=0;bool pending=false,fail=false;
-        auto transport=[&](const NativeTab&,LayoutAction action,const TabAppearance& value)->Json{
+        auto transport=[&](const NativeTab&,LayoutAction action,const LayoutOptions& value)->Json{
             ++calls;if(fail)throw Error(3,"simulated layout failure");
-            expect(value.width_mode=="system"||value.width_mode=="fixed"||value.width_mode=="content","valid transport policy");
+            validate_appearance(value.tabs);
             if(action==LayoutAction::apply)++applies;else ++restores;
             return {{"layout_applied",!pending},{"pending",pending}};
         };
         auto thread=[](HWND hwnd){return static_cast<DWORD>(reinterpret_cast<uintptr_t>(hwnd));};
         bool ended=false;auto probe=[&](DWORD,uint64_t){return ended?ProcessLifetime::ended:ProcessLifetime::running;};
-        auto sync=[&](std::vector<NativeTab> tabs,bool enabled,TabAppearance appearance){return tracker.synchronize(tabs,enabled,appearance,transport,thread,probe);};
+        auto sync=[&](std::vector<NativeTab> tabs,bool enabled,TabAppearance appearance){
+            return tracker.synchronize(tabs,{enabled?appearance:TabAppearance{}},transport,thread,probe);
+        };
         TabAppearance fixed{"fixed",320,120,480};
         expect(sync({a},false,fixed).at("complete")==true&&calls==0,"observe mode never injects width");
         sync({a},true,{});expect(calls==0,"system default never injects width");
@@ -96,6 +106,15 @@ int main(){
         sync({a},true,fixed);ended=true;calls=0;sync({},false,{});expect(calls==0,"ended lifetime not sent restoration");
         ended=false;state=sync({a},true,TabAppearance{"content",320,140,420});expect(state.at("layout_applied")==true,"content mode transported");
         state=sync({a},true,{});expect(state.at("complete")==true&&!state.at("layout_applied").get<bool>(),"switch to system restores width independently of titles");
+        const auto before_search=store.load();
+        auto hide=application_action(root,{{"action","search-box.set"},{"hidden",true}});
+        expect(hide.at("result").at("saved")==true&&store.load().search_box_hidden&&
+            store.load().tabs==before_search.tabs&&store.load().enabled==before_search.enabled,"hiding saves only search visibility");
+        state=tracker.synchronize({a},{{},true},transport,thread,probe);
+        expect(state.at("search_box_hidden")==true&&state.at("layout_applied")==false,"search-only policy can apply with native width");
+        application_action(root,{{"action","search-box.set"},{"hidden",false}});
+        state=tracker.synchronize({a},{},transport,thread,probe);
+        expect(!store.load().search_box_hidden&&state.at("complete")==true&&state.at("search_box_hidden")==false,"show restores search visibility");
         fs::remove_all(root);std::cout<<checks<<" appearance checks passed\n";return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }

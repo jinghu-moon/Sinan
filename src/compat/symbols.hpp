@@ -27,7 +27,7 @@ public:
     std::span<const unsigned char> at(uint32_t rva, size_t size) const;
     bool executable(uint32_t rva) const;
     bool readonly_data(uint32_t rva) const;
-    uint32_t function_size(uint32_t rva) const;
+    uint32_t function_size(uint32_t rva, uint32_t limit = 4096) const;
     Json identity() const;
 };
 struct SymbolSpec { const char* id; const char* name; bool code; };

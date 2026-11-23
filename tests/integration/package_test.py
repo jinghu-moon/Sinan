@@ -10,11 +10,14 @@ tui = len(sys.argv) < 3 or sys.argv[2] == "ON"
 required = {
     "sinan.exe", "sinan-agent.exe", "sinan-login.exe", "sinan-symbols.exe",
     "sinan-hook.dll", "sinan-layout.dll", "sinan-features.dll", "sinan-style.dll",
+    "sinan-folder-view.dll", "sinan-folder-sizes.exe",
 }
+if len(sys.argv) < 4 or sys.argv[3] != "OFF":
+    required.add("sinan-panel.exe")
 assert {p.name for p in (package / "bin").iterdir()} == required
 for name in ("README.md", "LICENSE", "THIRD_PARTY.md", "docs/06-sinan-refactor-tdd.md", "tools/update-agent.ps1"):
     assert (package / name).is_file(), name
-licenses = {"CLI11-LICENSE", "json-LICENSE", "tomlplusplus-LICENSE", "MinHook-LICENSE"}
+licenses = {"CLI11-LICENSE", "json-LICENSE", "tomlplusplus-LICENSE", "MinHook-LICENSE", "Everything-SDK3-LICENSE"}
 if tui:
     licenses.add("FTXUI-LICENSE")
 assert {p.name for p in (package / "licenses").iterdir()} == licenses

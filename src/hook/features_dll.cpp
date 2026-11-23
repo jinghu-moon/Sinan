@@ -1,7 +1,9 @@
 #include "hook/features.hpp"
+#include "hook/external_tabs.hpp"
 #include "hook/feature_admission.hpp"
 #include "hook/identity.hpp"
 #include "platform/close_dialog.hpp"
+#include "policy/entries.hpp"
 #include <MinHook.h>
 #include <shobjidl.h>
 #include <shlobj.h>
@@ -84,6 +86,32 @@ HRESULT add_tab(const NativeTab& tab,PCIDLIST_ABSOLUTE target,GUID* guid) {
     constexpr std::array<BYTE,16> expected{0x48,0x83,0xec,0x38,0x48,0x8b,0x01,0x4c,0x89,0x4c,0x24,0x20,0x41,0x83,0xc9,0xff};
     if(read<std::array<BYTE,16>>(tab.module_base+native_rva("add"))!=expected)throw Error(3,"Live AddTab function changed or is hooked");
     using Add=HRESULT(WINAPI*)(void*,PCIDLIST_ABSOLUTE,int,GUID*);return reinterpret_cast<Add>(tab.module_base+native_rva("add"))(object,target,0,guid);
+}
+ComPtr<IShellView> external_tab_view(const NativeTab& tab) {
+    const auto host=tab.host+0x10;
+    auto vtable=read<uintptr_t>(host);
+    const auto getter=tab.module_base+native_rva("get_browser");
+    if(vtable!=tab.module_base+native_rva("host_interface")||read<uintptr_t>(vtable+5*sizeof(uintptr_t))!=getter)
+        return {};
+    using Get=HRESULT(WINAPI*)(void*,REFIID,void**);
+    ComPtr<IServiceProvider> provider;
+    if(FAILED(reinterpret_cast<Get>(getter)(reinterpret_cast<void*>(host),IID_PPV_ARGS(&provider)))||!provider)return {};
+    ComPtr<IShellBrowser> browser;
+    if(FAILED(provider->QueryService(SID_STopLevelBrowser,IID_PPV_ARGS(&browser)))||!browser)return {};
+    HWND child{};
+    if(FAILED(browser->GetWindow(&child))||child!=tab.browser_window)return {};
+    ComPtr<IShellView> view;
+    if(FAILED(browser->QueryActiveShellView(&view)))return {};
+    return view;
+}
+bool discard_external_tab(const NativeTab& tab) {
+    const auto address=tab.module_base+native_rva("remove");
+    constexpr std::array<BYTE,11> expected{0x48,0x89,0x5c,0x24,0x18,0x48,0x89,0x74,0x24,0x20,0x55};
+    {
+        std::scoped_lock lock(setup);
+        if(!original_remove&&read<std::array<BYTE,11>>(address)!=expected)return false;
+    }
+    return SUCCEEDED(reinterpret_cast<Remove>(address)(actions_object(tab,4,"remove"),tab.guid));
 }
 uintptr_t navigation_object(const NativeTab& tab) {
     auto object=tab.host+0x10;auto vt=read<uintptr_t>(object);
@@ -269,9 +297,25 @@ Json reorder(const NativeTab& tab,const Json& payload,DWORD owner,uint64_t owner
 }
 void execute(FeaturePacket& p) {
     verify_layout_sender(self,p.sender_pid,p.sender_started,p.action==FeatureAction::inspect);
-    auto payload_check=Json::parse(p.payload);
-    if(auto reason=feature_admission_error(*compat::current_profile(),p.action,payload_check,p.require_active);!reason.empty())throw Error(3,reason);
-    auto tab=locate(p);auto payload=Json::parse(p.payload);
+    auto payload=Json::parse(p.payload);
+    if(auto reason=feature_admission_error(*compat::current_profile(),p.action,payload,p.require_active);!reason.empty())throw Error(3,reason);
+    if(p.action==FeatureAction::external_activation) {
+        if(bridge_process_started(GetCurrentProcess())!=p.target_started||!is_shell_windows_broker(GetCurrentProcess()))
+            throw Error(4,"Could not verify the ShellWindows broker");
+        auto report=external_tabs::configure_activation(self,p.sender_pid,p.sender_started,
+            payload.at("enabled").get<bool>(),payload.at("cookie").get<uint64_t>()).dump();
+        strcpy_s(p.report,report.c_str());
+        p.result=S_OK;
+        return;
+    }
+    auto tab=locate(p);
+    if(p.action==FeatureAction::external_tabs) {
+        const auto report=external_tabs::configure(self,tab,p.sender_pid,p.sender_started,
+            payload.at("enabled").get<bool>(),payload.value("cookie",uint64_t{})).dump();
+        strcpy_s(p.report,report.c_str());
+        p.result=S_OK;
+        return;
+    }
     auto found=std::find_if(states.begin(),states.end(),[&](auto& s){return s.tab.guid==tab.guid&&s.tab.frame==tab.frame;});
     if(p.action!=FeatureAction::inspect&&found!=states.end()&&found->expires>GetTickCount64()&&(found->owner!=p.sender_pid||found->owner_started!=p.sender_started))throw Error(4,"Tab is owned by another feature agent");
     if(p.action==FeatureAction::apply) {
@@ -296,20 +340,70 @@ void execute(FeaturePacket& p) {
             if(payload.value("icon_restored",false)){states.erase(found);found=states.end();}
         }else payload["icon_restored"]=true;
     }else if(p.action==FeatureAction::locate) {
-        using Select=HRESULT(WINAPI*)(void*,GUID);
-        auto hr=select_tab(tab,tab.guid);
-        if(FAILED(hr)||read<GUID>(tab.frame+native_field("active_guid"))!=tab.guid)throw Error(3,"Tab selection not confirmed");
+        if(payload.contains("expected_path")) {
+            auto item=location(tab);
+            PWSTR name{};
+            auto hr=item->GetDisplayName(SIGDN_FILESYSPATH,&name);
+            std::wstring actual=name?name:L"";
+            CoTaskMemFree(name);
+            if(FAILED(hr)||actual.empty()||directory_key(actual)!=directory_key(wide(payload.at("expected_path").get<std::string>())))
+                throw Error(3,"Directory tab changed before selection");
+        }
+        if(payload.value("foreground_only",false)&&GetForegroundWindow()!=tab.window)
+            throw Error(3,"Foreground window changed before tab selection");
+        if(read<GUID>(tab.frame+native_field("active_guid"))!=tab.guid&&FAILED(select_tab(tab,tab.guid)))
+            throw Error(3,"Explorer rejected tab selection");
+        if(payload.contains("select_file")&&payload.contains("expected_path"))
+            payload["file_selected"]=external_tabs::select_file(tab,wide(payload.at("expected_path").get<std::string>()),
+                wide(payload.at("select_file").get<std::string>()));
     }else if(p.action==FeatureAction::open) {
+        if(payload.contains("expected_path")&&directory_key(path_of(location(tab).Get()))!=
+            directory_key(wide(payload.at("expected_path").get<std::string>())))
+            throw Error(3,"Source tab navigated before opening its parent");
         auto path=wide(payload.at("path").get<std::string>());PIDLIST_ABSOLUTE target{};auto hr=SHParseDisplayName(path.c_str(),nullptr,&target,0,nullptr);
         if(FAILED(hr)||!target)throw Error(3,"Restore directory cannot be resolved");
+        if(payload.value("foreground_only",false)&&GetForegroundWindow()!=tab.window) {
+            CoTaskMemFree(target);
+            throw Error(3,"Foreground window changed before opening a tab");
+        }
         using Add=HRESULT(WINAPI*)(void*,PCIDLIST_ABSOLUTE,int,GUID*);GUID guid{};
         hr=add_tab(tab,target,&guid);CoTaskMemFree(target);
         if(FAILED(hr))throw Error(3,"Opening the directory failed");payload["opened_guid"]=guid_text(guid);
-        if(payload.value("select",false)) {
-            using Select=HRESULT(WINAPI*)(void*,GUID);
-            hr=select_tab(tab,guid);
-            if(FAILED(hr)||read<GUID>(tab.frame+native_field("active_guid"))!=guid)throw Error(5,"Directory opened but selection was not confirmed");
+        if(payload.value("select",false)&&(!payload.value("foreground_only",false)||GetForegroundWindow()==tab.window)) {
+            if(read<GUID>(tab.frame+native_field("active_guid"))!=guid)hr=select_tab(tab,guid);
+            payload["selection_confirmed"]=SUCCEEDED(hr)&&read<GUID>(tab.frame+native_field("active_guid"))==guid;
         }
+    }else if(p.action==FeatureAction::close_duplicate) {
+        const auto active_guid = read<GUID>(tab.frame+native_field("active_guid"));
+        if (active_guid==tab.guid||guid_text(active_guid)!=payload.at("active_guid").get<std::string>())
+            throw Error(5,"Selected tab changed before merging");
+        if (found!=states.end()&&found->expires>GetTickCount64()&&
+            (found->flags.close_protected()||found->flags.locked))
+            throw Error(5,"Duplicate tab is protected");
+        const auto tabs=read_native_tabs(tab.window,tab.process_id,tab.process_started);
+        const auto keeper=std::find_if(tabs.begin(),tabs.end(),[&](const auto& candidate){
+            return candidate.guid!=tab.guid&&guid_text(candidate.guid)==payload.at("keep_guid").get<std::string>();
+        });
+        const auto path=directory_key(wide(payload.at("path").get<std::string>()));
+        if (keeper==tabs.end()||directory_key(path_of(location(*keeper).Get()))!=path||
+            directory_key(path_of(location(tab).Get()))!=path)
+            throw Error(5,"Duplicate or retained tab changed directory before merging");
+        auto object=actions_object(tab,4,"remove");
+        const auto address=tab.module_base+native_rva("remove");
+        {
+            std::scoped_lock lock(setup);
+            constexpr std::array<BYTE,11> expected{0x48,0x89,0x5c,0x24,0x18,0x48,0x89,0x74,0x24,0x20,0x55};
+            if (!original_remove&&read<std::array<BYTE,11>>(address)!=expected)
+                throw Error(3,"Live RemoveTab function changed or is hooked");
+        }
+        if (FAILED(reinterpret_cast<Remove>(address)(object,tab.guid)))
+            throw Error(5,"Explorer rejected the duplicate tab close");
+        const auto after=native_order(tab);
+        p.result=S_OK;
+        const auto closed=std::find(after.begin(),after.end(),Json(guid_text(tab.guid)))==after.end();
+        const auto report=Json{{"closed",closed}}.dump();
+        strcpy_s(p.report,report.c_str());
+        return;
     }else if(p.action==FeatureAction::reorder)payload["docking"]=reorder(tab,payload,p.sender_pid,p.sender_started);
     else if(p.action!=FeatureAction::inspect)throw Error(2,"Unknown feature action");
     found=std::find_if(states.begin(),states.end(),[&](auto& s){return s.tab.guid==tab.guid&&s.tab.frame==tab.frame;});
@@ -324,6 +418,8 @@ void execute(FeaturePacket& p) {
     }
     if(p.action==FeatureAction::restore){report["behavior_restored"]=true;report["icon_restored"]=payload.value("icon_restored",false);report["icon_error"]=payload.value("icon_error",std::string{});}
     if(payload.contains("opened_guid"))report["opened_guid"]=payload.at("opened_guid");
+    if(payload.contains("selection_confirmed"))report["selection_confirmed"]=payload.at("selection_confirmed");
+    if(payload.contains("file_selected"))report["file_selected"]=payload.at("file_selected");
     if(payload.value("inventory",false)) {
         report["tabs"]=Json::array();
         for(auto& native:read_native_tabs(tab.window,tab.process_id,tab.process_started)) {

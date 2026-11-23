@@ -1,6 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 16 16" fill="none">
-  <title>Lock directory</title>
-  <path d="M5 7V5a3 3 0 0 1 6 0v2" stroke="#B45309" stroke-width="2"/>
-  <rect x="2" y="6" width="12" height="9" rx="2" fill="#F59E0B"/>
-  <path d="M8 9v3" stroke="#78350F" stroke-width="2" stroke-linecap="round"/>
-</svg>

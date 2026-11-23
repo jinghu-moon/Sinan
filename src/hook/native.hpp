@@ -1,6 +1,7 @@
 #pragma once
 #include "platform/windows.hpp"
 #include <vector>
+#include <optional>
 
 namespace sinan {
 // Built-in offline fallback. Symbol profiles admit additional images only after layout validation.
@@ -30,5 +31,6 @@ bool native_selection_supported();
 uintptr_t native_rva(const char* key);
 uint32_t native_field(const char* key);
 std::vector<NativeTab> read_native_tabs(HWND window, DWORD pid, uint64_t process_started);
+std::optional<GUID> read_active_tab(const NativeTab& tab);
 std::string guid_text(const GUID& guid);
 }

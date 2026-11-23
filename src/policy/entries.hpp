@@ -5,6 +5,7 @@
 namespace sinan {
 // Lexical normalization only; no filesystem/network access on Explorer's UI thread.
 std::wstring directory_key(std::wstring_view path);
+std::optional<std::wstring> directory_parent(std::wstring_view path);
 void validate_entries(const std::vector<DirectoryEntry>& entries);
 std::optional<std::wstring> alias_title(const std::vector<DirectoryEntry>& entries,
     std::wstring_view path,const DisplayOptions& display);

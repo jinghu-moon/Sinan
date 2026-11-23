@@ -1,6 +1,10 @@
 #include "hook/layout.hpp"
+#include "hook/everything_search.hpp"
 #include "hook/identity.hpp"
+#include "hook/style_abi.hpp"
+#include "hook/xaml_visual_tree.hpp"
 #include <xamlOM.h>
+#include <windows.foundation.h>
 #include <ocidl.h>
 #include <weakreference.h>
 #include <wrl.h>
@@ -11,7 +15,7 @@
 #include <map>
 #include <mutex>
 
-// XAML diagnostics is used only for tab layout. No XAML private vtable offsets
+// XAML diagnostics is used for Explorer layout. No XAML private vtable offsets
 // or generated WinUI projections are needed; the runtime resolves properties.
 namespace sinan::layout {
 using Microsoft::WRL::ComPtr;
@@ -71,20 +75,29 @@ struct SavedProperty {
     bool local = false;
     ComPtr<IInspectable> value;
 };
+enum class ElementKind { tab_view, tab_item, search_box, address_grid };
+struct SavedColumnSpan {
+    ComPtr<IInspectable> property;
+    ComPtr<IInspectable> original;
+};
 struct Element {
     InstanceHandle id = 0;
-    bool tab_view = false;
+    ElementKind kind = ElementKind::tab_item;
     ComPtr<IWeakReference> weak;
     std::map<std::wstring,SavedProperty> saved;
+    std::optional<SavedColumnSpan> column_span;
 };
 thread_local std::vector<Element> elements;
+thread_local std::map<InstanceHandle,ComPtr<IWeakReference>> navigation_roots;
 thread_local TabAppearance options;
+thread_local bool hide_search_box = false;
 thread_local DWORD owner = 0;
 thread_local uint64_t owner_started = 0, expires = 0;
 thread_local UINT_PTR timer = 0;
 thread_local std::string last_error;
 thread_local std::string operation;
 thread_local bool geometry_changed = false;
+thread_local size_t expanded_address_bars = 0;
 thread_local std::vector<InstanceHandle> release_queue;
 thread_local UINT_PTR release_timer = 0;
 // The pinned runtime uses the IInspectable identity pointer as its handle.
@@ -107,6 +120,148 @@ struct Api {
     ComPtr<IDiagnosticsLifetime> life;
     Api(){std::lock_guard lock(site_mutex);diag=diagnostics;tree=service;life=lifetime;}
 };
+Element& track_element(InstanceHandle handle,ElementKind kind,IInspectable* object) {
+    auto found=std::find_if(elements.begin(),elements.end(),[&](const auto& element){return element.id==handle;});
+    if(found!=elements.end())return *found;
+    ComPtr<IWeakReferenceSource> source;
+    winrt::check_hresult(object->QueryInterface(IID_PPV_ARGS(&source)));
+    Element record;
+    record.id=handle;
+    record.kind=kind;
+    winrt::check_hresult(source->GetWeakReference(&record.weak));
+    elements.push_back(std::move(record));
+    return elements.back();
+}
+template<class Interface>
+ComPtr<Interface> xaml_factory(const wchar_t* class_name) {
+    const winrt::hstring name(class_name);
+    ComPtr<Interface> factory;
+    RoGetActivationFactory(static_cast<HSTRING>(winrt::get_abi(name)),IID_PPV_ARGS(&factory));
+    return factory;
+}
+bool has_type(IInspectable* object,std::wstring_view expected) {
+    winrt::hstring type;
+    return SUCCEEDED(object->GetRuntimeClassName(reinterpret_cast<HSTRING*>(winrt::put_abi(type))))&&
+        std::wstring_view(type)==expected;
+}
+bool has_name(IInspectable* object,std::wstring_view expected) {
+    ComPtr<style::IElementResources> element;
+    winrt::hstring name;
+    return SUCCEEDED(object->QueryInterface(IID_PPV_ARGS(&element)))&&
+        SUCCEEDED(element->get_Name(winrt::put_abi(name)))&&std::wstring_view(name)==expected;
+}
+void discover_search_box(Api& api) {
+    erase_if(elements,[](const auto& element){return element.kind==ElementKind::search_box&&!resolve(element);});
+    if(std::any_of(elements.begin(),elements.end(),[](const auto& element){return element.kind==ElementKind::search_box;}))return;
+    auto helper=xaml_factory<ITreeHelper>(L"Microsoft.UI.Xaml.Media.VisualTreeHelper");
+    if(!helper)return;
+    std::vector<ComPtr<IInspectable>> roots;
+    for(const auto& [id,weak]:navigation_roots) {
+        ComPtr<IInspectable> root;
+        if(SUCCEEDED(weak->Resolve(__uuidof(IInspectable),&root))&&root)roots.push_back(std::move(root));
+    }
+    for(const auto& element:elements) {
+        if(element.kind!=ElementKind::tab_view)continue;
+        auto root=resolve(element);
+        for(int depth=0;root&&depth<40;++depth) {
+            ComPtr<IInspectable> dependency,parent;
+            if(FAILED(root->QueryInterface(xaml_dependency_object,&dependency))||
+                FAILED(helper->GetParent(dependency.Get(),&parent))||!parent)break;
+            root=std::move(parent);
+        }
+        if(root&&std::none_of(roots.begin(),roots.end(),[&](const auto& existing){return existing.Get()==root.Get();}))
+            roots.push_back(std::move(root));
+    }
+    size_t visited=0;
+    auto visit=[&](auto& self,IInspectable* object,int depth)->void {
+        if(++visited>4096||depth>40)return;
+        if(has_type(object,L"Microsoft.UI.Xaml.Controls.AutoSuggestBox")) {
+            if(has_name(object,L"FileExplorerSearchBox")) {
+                Registered instance(object,api.diag.Get(),api.life.Get());
+                track_element(instance.handle,ElementKind::search_box,object);
+            }
+            return;
+        }
+        ComPtr<IInspectable> dependency;
+        int32_t count=0;
+        if(FAILED(object->QueryInterface(xaml_dependency_object,&dependency))||
+            FAILED(helper->GetChildrenCount(dependency.Get(),&count)))return;
+        for(int32_t i=0;i<count&&visited<4096;++i) {
+            ComPtr<IInspectable> child;
+            if(SUCCEEDED(helper->GetChild(dependency.Get(),i,&child))&&child)self(self,child.Get(),depth+1);
+        }
+    };
+    for(const auto& root:roots)visit(visit,root.Get(),0);
+}
+void restore_address_bar(Element& element,IInspectable* address) {
+    if(!element.column_span)return;
+    ComPtr<style::IDependencyValues> values;
+    winrt::check_hresult(address->QueryInterface(IID_PPV_ARGS(&values)));
+    auto& [property,original]=*element.column_span;
+    winrt::check_hresult(original?values->SetValue(property.Get(),original.Get()):values->ClearValue(property.Get()));
+    element.column_span.reset();
+    geometry_changed=true;
+}
+bool expand_address_bar(Api& api,ITreeHelper& tree,IGridStatics& grid,IInspectable* search) {
+    ComPtr<IInspectable> search_dependency,parent,parent_dependency;
+    if(FAILED(search->QueryInterface(xaml_dependency_object,&search_dependency))||
+        FAILED(tree.GetParent(search_dependency.Get(),&parent))||!parent||
+        !has_type(parent.Get(),L"Microsoft.UI.Xaml.Controls.Grid")||
+        FAILED(parent->QueryInterface(xaml_dependency_object,&parent_dependency)))return false;
+    int32_t children=0;
+    if(FAILED(tree.GetChildrenCount(parent_dependency.Get(),&children))||children>32)return false;
+    ComPtr<IInspectable> address;
+    for(int i=0;i<children;++i) {
+        ComPtr<IInspectable> child;
+        if(FAILED(tree.GetChild(parent_dependency.Get(),i,&child))||!child||
+            !has_type(child.Get(),L"Microsoft.UI.Xaml.Controls.Grid"))continue;
+        if(has_name(child.Get(),L"FileExplorerAddressBarGrid")) {
+            if(address)return false;
+            address=std::move(child);
+        }
+    }
+    if(!address)return false;
+    ComPtr<style::IElementResources> address_element,search_element;
+    if(FAILED(address.As(&address_element))||FAILED(search_dependency.As(&search_element)))return false;
+    ComPtr<style::IDependencyValues> values;
+    if(FAILED(address.As(&values)))return false;
+    int32_t address_column=0,search_column=0,address_span=0,search_span=0,address_row=0,search_row=0;
+    if(FAILED(grid.GetColumn(address_element.Get(),&address_column))||FAILED(grid.GetColumn(search_element.Get(),&search_column))||
+        FAILED(grid.GetColumnSpan(address_element.Get(),&address_span))||FAILED(grid.GetColumnSpan(search_element.Get(),&search_span))||
+        FAILED(grid.GetRow(address_element.Get(),&address_row))||FAILED(grid.GetRow(search_element.Get(),&search_row)))return false;
+    if(address_row!=search_row||address_column<0||search_column<=address_column||search_column>32||
+        search_span<1||search_span>32)return false;
+    const int expanded_span=search_column-address_column+search_span;
+    if(address_span==expanded_span)return true;
+    if(address_span!=search_column-address_column)return false;
+
+    Registered instance(address.Get(),api.diag.Get(),api.life.Get());
+    auto& tracked=track_element(instance.handle,ElementKind::address_grid,address.Get());
+    if(!tracked.column_span) {
+        SavedColumnSpan saved;
+        winrt::check_hresult(grid.get_ColumnSpanProperty(&saved.property));
+        winrt::check_hresult(values->ReadLocalValue(saved.property.Get(),reinterpret_cast<void**>(saved.original.GetAddressOf())));
+        auto unset_factory=xaml_factory<style::IUnsetValue>(L"Microsoft.UI.Xaml.DependencyProperty");
+        if(!unset_factory)return false;
+        ComPtr<IUnknown> unset_identity,original_identity;
+        ComPtr<IInspectable> unset;
+        winrt::check_hresult(unset_factory->get_UnsetValue(reinterpret_cast<void**>(unset.GetAddressOf())));
+        winrt::check_hresult(unset.As(&unset_identity));
+        if(saved.original)winrt::check_hresult(saved.original.As(&original_identity));
+        if(original_identity.Get()==unset_identity.Get())saved.original.Reset();
+        // A boxed integer can be restored directly. Leave bindings in place.
+        if(saved.original) {
+            ComPtr<ABI::Windows::Foundation::IPropertyValue> value;
+            if(FAILED(saved.original.As(&value)))return false;
+            int32_t original_span=0;
+            if(FAILED(value->GetInt32(&original_span)))return false;
+        }
+        tracked.column_span=std::move(saved);
+    }
+    winrt::check_hresult(grid.SetColumnSpan(address_element.Get(),expanded_span));
+    geometry_changed=true;
+    return SUCCEEDED(grid.GetColumnSpan(address_element.Get(),&address_span))&&address_span==expanded_span;
+}
 void CALLBACK release_handles(HWND,UINT,UINT_PTR id,DWORD) {
     Api api;auto handles=std::move(release_queue);release_queue.clear();
     KillTimer(nullptr,id);release_timer=0;
@@ -144,11 +299,11 @@ void set_property(Api& api, InstanceHandle handle, const wchar_t* name, const wc
 void restore_element(Element& element, Api& api, InstanceHandle handle) {
     if(!element.saved.empty())geometry_changed=true;
     // Widen constraints before restoring width and its original constraints.
-    if(!element.tab_view && !element.saved.empty()) {
+    if(element.kind==ElementKind::tab_item && !element.saved.empty()) {
         set_property(api,handle,L"MinWidth",L"Double",L"0");
         set_property(api,handle,L"MaxWidth",L"Double",L"Infinity");
     }
-    for(const auto* name:{L"Width",L"MaxWidth",L"MinWidth",L"TabWidthMode"}) {
+    for(const auto* name:{L"Width",L"MaxWidth",L"MinWidth",L"TabWidthMode",L"Visibility"}) {
         auto it=element.saved.find(name);if(it==element.saved.end())continue;
         const auto& p=it->second;
         if(p.local) {Registered original(p.value.Get(),api.diag.Get(),api.life.Get());winrt::check_hresult(api.tree->SetProperty(handle,original.handle,p.index));}
@@ -156,8 +311,19 @@ void restore_element(Element& element, Api& api, InstanceHandle handle) {
     }
     element.saved.clear();
 }
+bool collapsed_visibility(std::wstring_view value) {
+    return value==L"Collapsed"||value==L"1";
+}
 void apply_element(Element& element, Api& api, InstanceHandle handle) {
-    if(element.tab_view) {
+    if(element.kind==ElementKind::search_box) {
+        Chain chain(api.tree.Get(),handle);
+        const auto* visibility=chain.find(L"Visibility");
+        if(visibility&&visibility->Value&&collapsed_visibility(visibility->Value))return;
+        save_property(element,api,handle,L"Visibility");
+        set_property(api,handle,L"Visibility",L"Microsoft.UI.Xaml.Visibility",L"Collapsed");
+        return;
+    }
+    if(element.kind==ElementKind::tab_view) {
         if(!element.saved.empty())return; // Both custom modes use SizeToContent.
         save_property(element,api,handle,L"TabWidthMode");
         set_property(api,handle,L"TabWidthMode",L"Microsoft.UI.Xaml.Controls.TabViewWidthMode",L"SizeToContent");
@@ -184,19 +350,39 @@ void apply_element(Element& element, Api& api, InstanceHandle handle) {
     set_property(api,handle,L"MaxWidth",L"Double",std::to_wstring(options.width_mode=="fixed"?options.width:options.max_width));
     set_property(api,handle,L"MinWidth",L"Double",std::to_wstring(options.width_mode=="fixed"?options.width:options.min_width));
 }
-void refresh(bool restore) {
+void refresh() {
     Api api;if(!api.tree)return;
-    // Applying the TabView first lets native layout update its item widths.
-    // Restoring the TabView last lets its original mode recalculate all tabs.
-    for(bool view:restore?std::initializer_list<bool>{false,true}:std::initializer_list<bool>{true,false}) {
+    if(hide_search_box)discover_search_box(api);
+    const bool restore_width=options.width_mode=="system";
+    const auto first=restore_width?ElementKind::tab_item:ElementKind::tab_view;
+    const auto second=restore_width?ElementKind::tab_view:ElementKind::tab_item;
+    for(auto kind:{first,second,ElementKind::search_box}) {
+        const bool restore=kind==ElementKind::search_box?!hide_search_box:restore_width;
         for(auto it=elements.begin();it!=elements.end();) {
+            if(it->kind!=kind||(restore&&it->saved.empty())){++it;continue;}
             auto object=resolve(*it);
             if(!object){it=elements.erase(it);continue;}
-            if(it->tab_view==view) {
-                Registered instance(object.Get(),api.diag.Get(),api.life.Get());
-                if(restore)restore_element(*it,api,instance.handle);else apply_element(*it,api,instance.handle);
-            }
+            Registered instance(object.Get(),api.diag.Get(),api.life.Get());
+            if(restore)restore_element(*it,api,instance.handle);else apply_element(*it,api,instance.handle);
             ++it;
+        }
+    }
+    expanded_address_bars=0;
+    if(hide_search_box) {
+        auto tree=xaml_factory<ITreeHelper>(L"Microsoft.UI.Xaml.Media.VisualTreeHelper");
+        auto grid=xaml_factory<IGridStatics>(L"Microsoft.UI.Xaml.Controls.Grid");
+        if(!tree||!grid)return;
+        std::vector<ComPtr<IInspectable>> searches;
+        for(const auto& element:elements)if(element.kind==ElementKind::search_box)
+            if(auto object=resolve(element))searches.push_back(std::move(object));
+        for(const auto& search:searches)if(expand_address_bar(api,*tree.Get(),*grid.Get(),search.Get()))++expanded_address_bars;
+    }else {
+        for(auto it=elements.begin();it!=elements.end();) {
+            if(it->kind!=ElementKind::address_grid){++it;continue;}
+            if(auto object=resolve(*it)) {
+                restore_address_bar(*it,object.Get());
+                ++it;
+            }else it=elements.erase(it);
         }
     }
 }
@@ -206,11 +392,19 @@ Json inspect() {
     for(const auto& element:elements) {
         auto object=resolve(element);if(!object)continue;
         Registered instance(object.Get(),api.diag.Get(),api.life.Get());Chain chain(api.tree.Get(),instance.handle);
-        Json item{{"kind",element.tab_view?"TabView":"TabViewItem"}};
-        for(const auto* name:{L"Width",L"MinWidth",L"MaxWidth",L"ActualWidth"}) {
+        Json item{{"kind",element.kind==ElementKind::search_box?"FileExplorerSearchBox":
+            element.kind==ElementKind::address_grid?"FileExplorerAddressBarGrid":
+            element.kind==ElementKind::tab_view?"TabView":"TabViewItem"}};
+        for(const auto* name:{L"Width",L"MinWidth",L"MaxWidth",L"ActualWidth",L"Visibility"}) {
             if(auto value=chain.find(name)) {
                 item[utf8(name)]=value->Value?utf8(value->Value):"";
             }
+        }
+        if(element.kind==ElementKind::address_grid) {
+            ComPtr<style::IElementResources> address;
+            double width=0;
+            if(SUCCEEDED(object.As(&address))&&SUCCEEDED(address->get_ActualWidth(&width)))
+                item["ActualWidth"]=std::to_string(width);
         }
         result.push_back(std::move(item));
     }
@@ -218,31 +412,47 @@ Json inspect() {
 }
 void CALLBACK lease_timer(HWND,UINT,UINT_PTR id,DWORD) {
     if(expires>GetTickCount64())return;
-    try{refresh(true);last_error.clear();}catch(...){last_error="Layout restoration failed";return;}
-    owner=0;owner_started=0;expires=0;options={};KillTimer(nullptr,id);timer=0;
+    options={};hide_search_box=false;
+    try{refresh();last_error.clear();}catch(...){last_error="Layout restoration failed";return;}
+    owner=0;owner_started=0;expires=0;KillTimer(nullptr,id);timer=0;
 }
 class Watcher final : public RuntimeClass<RuntimeClassFlags<Microsoft::WRL::ClassicCom>,IVisualTreeServiceCallback2> {
 public:
-    HRESULT STDMETHODCALLTYPE OnVisualTreeChange(ParentChildRelation,VisualElement element,VisualMutationType mutation) override {
+    HRESULT STDMETHODCALLTYPE OnVisualTreeChange(ParentChildRelation relation,VisualElement element,VisualMutationType mutation) override {
         Api api;
         const char* stage="callback";
         try {
             if(mutation==Remove) {
                 std::erase_if(elements,[&](const auto& e){return e.id==element.Handle;});
-            } else if(element.Type && (wcscmp(element.Type,L"Microsoft.UI.Xaml.Controls.TabViewItem")==0 || wcscmp(element.Type,L"Microsoft.UI.Xaml.Controls.TabView")==0)) {
-                stage="GetIInspectableFromHandle";ComPtr<IInspectable> object;
-                auto object_hr=api.diag->GetIInspectableFromHandle(element.Handle,&object);
-                if(object_hr==HRESULT_FROM_WIN32(ERROR_NOT_FOUND))object_hr=identity_from_callback(element.Handle,&object);
-                winrt::check_hresult(object_hr);
-                HSTRING runtime_name{};winrt::check_hresult(object->GetRuntimeClassName(&runtime_name));
-                std::wstring class_name(WindowsGetStringRawBuffer(runtime_name,nullptr));WindowsDeleteString(runtime_name);
-                if(class_name!=element.Type)winrt::throw_hresult(E_NOINTERFACE);
-                stage="IWeakReferenceSource";ComPtr<IWeakReferenceSource> weak_source;winrt::check_hresult(object.As(&weak_source));
-                Element record;record.id=element.Handle;record.tab_view=wcscmp(element.Type,L"Microsoft.UI.Xaml.Controls.TabView")==0;
-                stage="GetWeakReference";winrt::check_hresult(weak_source->GetWeakReference(&record.weak));
-                auto found=std::find_if(elements.begin(),elements.end(),[&](const auto& e){return e.id==element.Handle;});
-                if(found==elements.end())elements.push_back(std::move(record));
-                stage="refresh";if(expires>GetTickCount64()&&options.width_mode!="system")refresh(false);
+                navigation_roots.erase(element.Handle);
+            } else if(element.Type) {
+                const std::wstring_view type(element.Type);
+                const bool search=type==L"Microsoft.UI.Xaml.Controls.AutoSuggestBox"&&element.Name&&
+                    std::wstring_view(element.Name)==L"FileExplorerSearchBox";
+                const bool root=!relation.Parent||type==L"FileExplorerExtensions.NavigationBarControl";
+                const bool tab_view=type==L"Microsoft.UI.Xaml.Controls.TabView";
+                const bool tab_item=type==L"Microsoft.UI.Xaml.Controls.TabViewItem";
+                if(search||tab_view||tab_item||root) {
+                    stage="GetIInspectableFromHandle";ComPtr<IInspectable> object;
+                    auto object_hr=api.diag->GetIInspectableFromHandle(element.Handle,&object);
+                    if(object_hr==HRESULT_FROM_WIN32(ERROR_NOT_FOUND))object_hr=identity_from_callback(element.Handle,&object);
+                    winrt::check_hresult(object_hr);
+                    HSTRING runtime_name{};winrt::check_hresult(object->GetRuntimeClassName(&runtime_name));
+                    std::wstring class_name(WindowsGetStringRawBuffer(runtime_name,nullptr));WindowsDeleteString(runtime_name);
+                    if(class_name!=element.Type)winrt::throw_hresult(E_NOINTERFACE);
+                    stage="GetWeakReference";
+                    if(root) {
+                        ComPtr<IWeakReferenceSource> weak_source;
+                        if(SUCCEEDED(object.As(&weak_source)))
+                            weak_source->GetWeakReference(navigation_roots[element.Handle].ReleaseAndGetAddressOf());
+                        if(!navigation_roots[element.Handle])navigation_roots.erase(element.Handle);
+                    }
+                    if(search||tab_view||tab_item) {
+                        const auto kind=search?ElementKind::search_box:tab_view?ElementKind::tab_view:ElementKind::tab_item;
+                        track_element(element.Handle,kind,object.Get());
+                    }
+                    stage="refresh";if((tab_view||tab_item)&&expires>GetTickCount64()&&options.width_mode!="system")refresh();
+                }
             }
         } catch(...){last_error=std::string(stage)+": "+std::to_string(static_cast<int32_t>(winrt::to_hresult()));}
         // Initial enumeration supplies a whole batch. Releasing a parent in
@@ -315,12 +525,23 @@ void initialize() {
 }
 void execute(LayoutPacket& packet) {
     verify_layout_sender(self,packet.sender_pid,packet.sender_started,packet.action==LayoutAction::inspect);
-    if(!native_inventory_supported())throw Error(3,"当前 Explorer 版本尚无布局适配");
+    if(packet.mode&&!native_inventory_supported())throw Error(3,"当前 Explorer 版本尚无标签宽度适配");
     DWORD pid{};auto thread=GetWindowThreadProcessId(reinterpret_cast<HWND>(packet.window),&pid);
     if(pid!=GetCurrentProcessId()||thread!=GetCurrentThreadId()||bridge_process_started(GetCurrentProcess())!=packet.target_started)
         throw Error(4,"布局目标身份或 UI 线程已变化");
+    if(packet.action==LayoutAction::search_enable||packet.action==LayoutAction::search_disable) {
+        Json report;
+        try {
+            const auto request = Json::parse(packet.report, nullptr, false);
+            const auto all_drives = request.is_object() && request.value("all_drives", false);
+            report=explorer_search::configure(self,packet.sender_pid,packet.sender_started,
+                packet.action==LayoutAction::search_enable,all_drives);
+        }catch(const Error& error){report={{"active",false},{"error",error.what()}};}
+        const auto result=report.dump();
+        strcpy_s(packet.report,result.c_str());packet.result=S_OK;return;
+    }
     if(packet.action!=LayoutAction::apply&&packet.action!=LayoutAction::restore&&packet.action!=LayoutAction::inspect)throw Error(2,"未知布局操作");
-    if(packet.mode>2)throw Error(2,"未知布局模式");
+    if(packet.mode>2||packet.search_box_hidden>1)throw Error(2,"未知布局选项");
     TabAppearance next{packet.mode==1?"fixed":packet.mode==2?"content":"system",packet.width,packet.min_width,packet.max_width};
     validate_appearance(next);
     initialize();
@@ -330,15 +551,18 @@ void execute(LayoutPacket& packet) {
     }
     if(packet.action!=LayoutAction::inspect) {
         geometry_changed=false;
-        if(owner && expires>GetTickCount64() && (owner!=packet.sender_pid||owner_started!=packet.sender_started))throw Error(4,"标签宽度由其他代理控制");
-        const bool restore=packet.action==LayoutAction::restore||next.width_mode=="system";
+        if(owner && expires>GetTickCount64() && (owner!=packet.sender_pid||owner_started!=packet.sender_started))throw Error(4,"Explorer 布局由其他代理控制");
+        const bool restore=packet.action==LayoutAction::restore||(next.width_mode=="system"&&!packet.search_box_hidden);
         if(!restore) {
-            if(!timer){timer=SetTimer(nullptr,0,1000,lease_timer);if(!timer)throw Error(1,"无法创建宽度恢复计时器");}
-            options=next;owner=packet.sender_pid;owner_started=packet.sender_started;expires=GetTickCount64()+10000;
+            if(!timer){timer=SetTimer(nullptr,0,1000,lease_timer);if(!timer)throw Error(1,"无法创建布局恢复计时器");}
+            owner=packet.sender_pid;owner_started=packet.sender_started;expires=GetTickCount64()+10000;
         }
-        try {refresh(restore);last_error.clear();}
+        options=restore?TabAppearance{}:next;
+        hide_search_box=!restore&&packet.search_box_hidden;
+        try {refresh();last_error.clear();}
         catch(...) {
-            auto error=winrt::to_hresult();auto failed_operation=operation;try{refresh(true);}catch(...){}
+            auto error=winrt::to_hresult();auto failed_operation=operation;
+            options={};hide_search_box=false;try{refresh();}catch(...){}
             expires=0;operation=failed_operation;throw winrt::hresult_error(error);
         }
         if(restore) {if(timer)KillTimer(nullptr,timer);timer=0;owner=0;expires=0;owner_started=0;options={};}
@@ -356,14 +580,23 @@ void execute(LayoutPacket& packet) {
             if(options.width_mode=="system"&&width!="Auto"&&std::abs(actual-std::stod(width))>1.0)measured=false;
         }catch(...){measured=false;}
     }
-    Json report{{"layout_applied",count>0&&measured&&last_error.empty()&&!geometry_changed},{"tab_count",count},{"mode",options.width_mode},
+    size_t search_boxes=0,hidden_search_boxes=0;
+    for(const auto& item:observations)if(item.at("kind")=="FileExplorerSearchBox") {
+        ++search_boxes;
+        if(collapsed_visibility(wide(item.value("Visibility",std::string{}))))++hidden_search_boxes;
+    }
+    const bool search_hidden=search_boxes>0&&search_boxes==hidden_search_boxes;
+    const bool tabs_confirmed=options.width_mode=="system"|| (count>0&&measured);
+    Json report{{"layout_applied",tabs_confirmed&&(!hide_search_box||search_hidden)&&last_error.empty()&&!geometry_changed},
+        {"tab_count",count},{"mode",options.width_mode},{"search_boxes",search_boxes},{"search_box_hidden",search_hidden},
+        {"expanded_address_bars",expanded_address_bars},
         {"elements",observations},{"error",last_error},{"measurement","XAML ActualWidth (DIP)"}};
     auto text=report.dump();if(text.size()>=sizeof(packet.report))throw Error(2,"布局报告过大");
     strcpy_s(packet.report,text.c_str());packet.result=S_OK;geometry_changed=false;
 }
 void process(LayoutPacket* packet) {
     try {
-        if(packet->magic!=0x54544c59||packet->version!=1||packet->size!=sizeof(LayoutPacket))throw Error(2,"无效布局报文");
+        if(packet->magic!=0x54544c59||packet->version!=2||packet->size!=sizeof(LayoutPacket))throw Error(2,"无效布局报文");
         auto copy=std::make_unique<LayoutPacket>(*packet);execute(*copy);packet->result=copy->result;
         std::copy(std::begin(copy->report),std::end(copy->report),std::begin(packet->report));
     }catch(const Error& e){packet->result=HRESULT_FROM_WIN32(e.code==4?ERROR_ACCESS_DENIED:ERROR_NOT_SUPPORTED);}

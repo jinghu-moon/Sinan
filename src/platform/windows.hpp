@@ -31,7 +31,8 @@ fs::path data_directory();
 std::string read_file(const fs::path& path);
 void atomic_write(const fs::path& path, std::string_view content);
 std::wstring quote_argument(std::wstring_view value);
-std::wstring current_sid();
+std::wstring process_user_sid(HANDLE process);
+inline std::wstring current_sid() { return process_user_sid(GetCurrentProcess()); }
 DWORD session_id();
 // Unknown includes access/query failures; only ended confirms a lifetime is gone.
 enum class ProcessLifetime { running, ended, unknown };

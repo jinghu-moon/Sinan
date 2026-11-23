@@ -38,6 +38,13 @@ std::wstring normalize(std::wstring_view input) {
 std::wstring directory_key(std::wstring_view path) {
     auto p=normalize(path);CharUpperBuffW(p.data(),static_cast<DWORD>(p.size()));return p;
 }
+std::optional<std::wstring> directory_parent(std::wstring_view path) {
+    auto normalized=normalize(path);
+    const auto last=normalized.rfind(L'\\');
+    if (last==normalized.npos||last+1==normalized.size()) return std::nullopt;
+    if (normalized.starts_with(L"\\\\")&&last==normalized.find(L'\\',2)) return std::nullopt;
+    return normalized.substr(0,last==2?3:last);
+}
 void validate_entries(const std::vector<DirectoryEntry>& entries) {
     if(entries.size()>128)invalid("At most 128 directory entries are supported");
     std::set<std::string> ids;std::set<std::wstring> paths;
@@ -46,6 +53,7 @@ void validate_entries(const std::vector<DirectoryEntry>& entries) {
         if(e.name.empty()||e.name.size()>128||std::any_of(e.name.begin(),e.name.end(),[](auto c){return c<32;}))invalid("Entry name must be 1..128 characters without control characters");
         auto path=directory_key(e.path);if(e.enabled&&!paths.insert(path).second)invalid("Enabled directory entries must have unique paths");
         if(e.title!="off"&&e.title!="alias"&&e.title!="alias_depth")invalid("Title mode must be off, alias or alias_depth");
+        if(e.scope!="global"&&e.scope!="explorer")invalid("Directory shortcut scope must be global or explorer");
     }
 }
 std::optional<std::wstring> alias_title(const std::vector<DirectoryEntry>& entries,std::wstring_view input,const DisplayOptions& display) {

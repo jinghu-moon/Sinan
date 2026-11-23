@@ -3,6 +3,7 @@
 #include "hook/style_abi.hpp"
 #include "hook/tab_icon.hpp"
 #include "hook/identity.hpp"
+#include "hook/xaml_visual_tree.hpp"
 #include <xamlOM.h>
 #include <ocidl.h>
 #include <weakreference.h>
@@ -35,46 +36,6 @@ MIDL_INTERFACE("7776037B-CBBE-4DE1-AD6F-0DBF1D5817B4") IDiagnosticsLifetime : pu
 };
 // Public WinRT ABI from Microsoft.UI.Xaml.winmd. Only the first two methods
 // are needed; Resources is a CLR property and is absent from the DP chain.
-struct Thickness {double left,top,right,bottom;};
-MIDL_INTERFACE("FE08F13D-DC6A-5495-AD44-C2D8D21863B0") IElementResources : public IInspectable {
-virtual HRESULT STDMETHODCALLTYPE get_Triggers(void**) = 0;
-            virtual HRESULT STDMETHODCALLTYPE get_Resources(IInspectable**) = 0;
-            virtual HRESULT STDMETHODCALLTYPE put_Resources(void*) = 0;
-            virtual HRESULT STDMETHODCALLTYPE get_Tag(void**) = 0;
-            virtual HRESULT STDMETHODCALLTYPE put_Tag(void*) = 0;
-            virtual HRESULT STDMETHODCALLTYPE get_Language(void**) = 0;
-            virtual HRESULT STDMETHODCALLTYPE put_Language(void*) = 0;
-            virtual HRESULT STDMETHODCALLTYPE get_ActualWidth(double*) = 0;
-            virtual HRESULT STDMETHODCALLTYPE get_ActualHeight(double*) = 0;
-            virtual HRESULT STDMETHODCALLTYPE get_Width(double*) = 0;
-            virtual HRESULT STDMETHODCALLTYPE put_Width(double) = 0;
-            virtual HRESULT STDMETHODCALLTYPE get_Height(double*) = 0;
-            virtual HRESULT STDMETHODCALLTYPE put_Height(double) = 0;
-            virtual HRESULT STDMETHODCALLTYPE get_MinWidth(double*) = 0;
-            virtual HRESULT STDMETHODCALLTYPE put_MinWidth(double) = 0;
-            virtual HRESULT STDMETHODCALLTYPE get_MaxWidth(double*) = 0;
-            virtual HRESULT STDMETHODCALLTYPE put_MaxWidth(double) = 0;
-            virtual HRESULT STDMETHODCALLTYPE get_MinHeight(double*) = 0;
-            virtual HRESULT STDMETHODCALLTYPE put_MinHeight(double) = 0;
-            virtual HRESULT STDMETHODCALLTYPE get_MaxHeight(double*) = 0;
-            virtual HRESULT STDMETHODCALLTYPE put_MaxHeight(double) = 0;
-            virtual HRESULT STDMETHODCALLTYPE get_HorizontalAlignment(int32_t*) = 0;
-            virtual HRESULT STDMETHODCALLTYPE put_HorizontalAlignment(int32_t) = 0;
-            virtual HRESULT STDMETHODCALLTYPE get_VerticalAlignment(int32_t*) = 0;
-            virtual HRESULT STDMETHODCALLTYPE put_VerticalAlignment(int32_t) = 0;
-            virtual HRESULT STDMETHODCALLTYPE get_Margin(Thickness*) = 0;
-            virtual HRESULT STDMETHODCALLTYPE put_Margin(Thickness) = 0;
-            virtual HRESULT STDMETHODCALLTYPE get_Name(void**) = 0;
-            };
-struct XamlPoint {float x,y;};struct XamlRect {float x,y,width,height;};
-MIDL_INTERFACE("5AECE43C-7651-5BB5-855C-2198496E455E") ITreeHelper : public IInspectable {
-    virtual HRESULT STDMETHODCALLTYPE FindPoint(XamlPoint,void*,void**) = 0;
-    virtual HRESULT STDMETHODCALLTYPE FindRect(XamlRect,void*,void**) = 0;
-    virtual HRESULT STDMETHODCALLTYPE FindAllPoint(XamlPoint,void*,bool,void**) = 0;
-    virtual HRESULT STDMETHODCALLTYPE FindAllRect(XamlRect,void*,bool,void**) = 0;
-    virtual HRESULT STDMETHODCALLTYPE GetChild(IInspectable*,int32_t,IInspectable**) = 0;
-    virtual HRESULT STDMETHODCALLTYPE GetChildrenCount(IInspectable*,int32_t*) = 0;
-};
 HMODULE self = nullptr;
 std::atomic<HRESULT> initialization{E_PENDING};
 std::atomic<bool> started{false};

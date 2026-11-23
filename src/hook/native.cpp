@@ -73,6 +73,19 @@ bool native_features_supported(){auto p=compat::current_profile();return p->clos
 bool native_selection_supported(){return compat::current_profile()->selection;}
 uintptr_t native_rva(const char* key){return compat::current_profile()->rva(key);}
 uint32_t native_field(const char* key){return compat::current_profile()->field(key);}
+std::optional<GUID> read_active_tab(const NativeTab& tab) {
+    if(!tab.frame||!native_selection_supported())return {};
+    DWORD pid{};
+    if(!GetWindowThreadProcessId(tab.window,&pid)||pid!=tab.process_id||
+        static_cast<uintptr_t>(GetWindowLongPtrW(tab.window,0))!=tab.frame)return {};
+    Handle process(OpenProcess(PROCESS_VM_READ|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,pid));
+    FILETIME created{},exited{},kernel{},user{};
+    if(!process||!GetProcessTimes(process.get(),&created,&exited,&kernel,&user))return {};
+    const auto started=(uint64_t(created.dwHighDateTime)<<32)|created.dwLowDateTime;
+    if(started!=tab.process_started)return {};
+    try{return read<GUID>(process.get(),tab.frame+native_field("active_guid"));}
+    catch(const Error&){return {};}
+}
 std::vector<NativeTab> read_native_tabs(HWND window, DWORD pid, uint64_t started) {
     auto profile=compat::current_profile();
     if (!profile->inventory) throw Error(3, "ExplorerFrame 兼容校验未通过: "+profile->reason);

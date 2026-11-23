@@ -2,6 +2,8 @@
 #include "platform/explorer.hpp"
 #include <sddl.h>
 #include <userenv.h>
+#include <algorithm>
+#include <memory>
 #include <vector>
 
 namespace sinan {
@@ -82,6 +84,29 @@ HANDLE prepare_token() {
     if (desktop_token) return duplicate_user_token(desktop_token.get(), true);
     throw Error(4, "无法取得当前用户当前会话的桌面令牌，尚未结束 Explorer；" + reason);
 }
+
+std::wstring environment_with_variable(const wchar_t* base, const std::pair<std::wstring, std::wstring>& variable) {
+    std::vector<std::wstring_view> entries;
+    for (auto current = base; *current; current += wcslen(current) + 1) {
+        const std::wstring_view entry(current);
+        const auto separator = entry.find(L'=', 1);
+        if (separator != std::wstring_view::npos &&
+            CompareStringOrdinal(entry.data(), static_cast<int>(separator), variable.first.c_str(), -1, TRUE) == CSTR_EQUAL)
+            continue;
+        entries.push_back(entry);
+    }
+    const auto added = variable.first + L"=" + variable.second;
+    entries.push_back(added);
+    std::sort(entries.begin(), entries.end(), [](std::wstring_view a, std::wstring_view b) {
+        return CompareStringOrdinal(a.data(), static_cast<int>(a.size()), b.data(), static_cast<int>(b.size()), TRUE) == CSTR_LESS_THAN;
+    });
+    std::wstring result;
+    for (auto entry : entries) {
+        result.append(entry);
+        result.push_back(L'\0');
+    }
+    return result;
+}
 }
 UserProcessLauncher::UserProcessLauncher() : token_(prepare_token()) {
     if (token_) elevated_context_ = is_elevated(token_.get());
@@ -89,18 +114,43 @@ UserProcessLauncher::UserProcessLauncher() : token_(prepare_token()) {
         throw Error(4, system_error("准备桌面用户环境，尚未结束 Explorer"));
 }
 UserProcessLauncher::~UserProcessLauncher() { if (environment_) DestroyEnvironmentBlock(environment_); }
-UserProcess UserProcessLauncher::launch(const fs::path& executable, std::wstring command, DWORD flags) const {
+UserProcess UserProcessLauncher::launch(const fs::path& executable, std::wstring command, DWORD flags,
+    const fs::path& working_directory, const std::pair<std::wstring, std::wstring>* variable) const {
     STARTUPINFOW startup{sizeof(startup)}; PROCESS_INFORMATION process{};
+    const auto directory = working_directory.empty() ? executable.parent_path() : working_directory;
+    auto environment = uses_user_token() ? environment_ : nullptr;
+    std::wstring custom_environment;
+    if (variable) {
+        std::unique_ptr<wchar_t, decltype(&FreeEnvironmentStringsW)> inherited(
+            environment ? nullptr : GetEnvironmentStringsW(), FreeEnvironmentStringsW);
+        const auto* base = environment ? static_cast<const wchar_t*>(environment) : inherited.get();
+        if (!base) throw Error(4, system_error("Read the child process environment"));
+        custom_environment = environment_with_variable(base, *variable);
+        environment = custom_environment.data();
+        flags |= CREATE_UNICODE_ENVIRONMENT;
+    }
     BOOL created = FALSE;
     if (uses_user_token()) {
         wchar_t desktop[] = L"winsta0\\default"; startup.lpDesktop = desktop;
         created = CreateProcessWithTokenW(token_.get(), 0, executable.c_str(), command.data(),
-            flags | CREATE_UNICODE_ENVIRONMENT, environment_, executable.parent_path().c_str(), &startup, &process);
+            flags | CREATE_UNICODE_ENVIRONMENT, environment, directory.c_str(), &startup, &process);
     } else {
         created = CreateProcessW(executable.c_str(), command.data(), nullptr, nullptr, FALSE, flags,
-            nullptr, executable.parent_path().c_str(), &startup, &process);
+            environment, directory.c_str(), &startup, &process);
     }
     if (!created) throw Error(4, system_error("以桌面用户令牌启动进程"));
     return UserProcess(process.hProcess, process.hThread);
+}
+UserProcess UserProcessLauncher::launch_redirected(const fs::path& executable,std::wstring command,
+    const fs::path& working_directory,STARTUPINFOEXW& startup) const {
+    constexpr DWORD flags=CREATE_NO_WINDOW|CREATE_SUSPENDED|EXTENDED_STARTUPINFO_PRESENT;
+    PROCESS_INFORMATION process{};
+    const auto created=uses_user_token()?
+        CreateProcessAsUserW(token_.get(),executable.c_str(),command.data(),nullptr,nullptr,TRUE,
+            flags|CREATE_UNICODE_ENVIRONMENT,environment_,working_directory.c_str(),&startup.StartupInfo,&process):
+        CreateProcessW(executable.c_str(),command.data(),nullptr,nullptr,TRUE,
+            flags,nullptr,working_directory.c_str(),&startup.StartupInfo,&process);
+    if(!created)throw Error(4,system_error("Start archive tool in desktop user context"));
+    return UserProcess(process.hProcess,process.hThread);
 }
 }

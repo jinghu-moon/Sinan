@@ -8,6 +8,7 @@
 #include <map>
 #include <atomic>
 #include <set>
+#include <algorithm>
 #include "hook/features.hpp"
 
 namespace sinan {
@@ -27,12 +28,28 @@ struct TaskMemory {
     void* value = nullptr;
     ~TaskMemory() { CoTaskMemFree(value); }
 };
+HRESULT resolve_browser(IWebBrowser2& web, HWND top, DWORD pid, ComPtr<IShellBrowser>& browser, HWND& child) {
+    ComPtr<IServiceProvider> services;
+    auto hr=web.QueryInterface(IID_PPV_ARGS(&services));
+    if(FAILED(hr))return hr;
+    hr=services->QueryService(SID_STopLevelBrowser,IID_PPV_ARGS(&browser));
+    if(FAILED(hr))hr=services->QueryService(IID_IShellBrowser,IID_PPV_ARGS(&browser));
+    if(FAILED(hr)||!browser)return FAILED(hr)?hr:E_NOINTERFACE;
+    hr=browser->GetWindow(&child);
+    DWORD child_pid{};
+    GetWindowThreadProcessId(child,&child_pid);
+    if(FAILED(hr)||!child||child==top||child_pid!=pid||!IsChild(top,child))return E_FAIL;
+    return S_OK;
+}
 HRESULT read_location(IShellBrowser* browser, TabLocation& location) {
     ComPtr<IShellView> view;
-    HRESULT hr = browser->QueryActiveShellView(&view);
-    if (FAILED(hr) || !view) return FAILED(hr) ? hr : E_NOINTERFACE;
+    auto hr=browser->QueryActiveShellView(&view);
+    return FAILED(hr)||!view?(FAILED(hr)?hr:E_NOINTERFACE):shell_view_location(*view.Get(),location);
+}
+}
+HRESULT shell_view_location(IShellView& view, TabLocation& location) {
     ComPtr<IFolderView> folder_view;
-    hr = view.As(&folder_view);
+    auto hr = view.QueryInterface(IID_PPV_ARGS(&folder_view));
     if (FAILED(hr)) return hr;
     ComPtr<IPersistFolder2> folder;
     hr = folder_view->GetFolder(IID_PPV_ARGS(&folder));
@@ -56,13 +73,66 @@ HRESULT read_location(IShellBrowser* browser, TabLocation& location) {
     // A virtual folder is successfully resolved even though no filesystem path exists.
     return S_OK;
 }
-}
 ShellTabEnumerator::ShellTabEnumerator() {
     auto hr = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     if (FAILED(hr)) throw Error(1, hr_error("初始化 Shell COM apartment", hr));
     initialized_ = true;
 }
 ShellTabEnumerator::~ShellTabEnumerator() { if (initialized_) CoUninitialize(); }
+ComPtr<IShellView> ShellTabEnumerator::view(HWND frame, HWND browser_window, bool require_foreground,
+    ComPtr<IShellBrowser>* owner, ComPtr<IUnknown>* identity) {
+    DWORD pid{};
+    GetWindowThreadProcessId(frame,&pid);
+    const auto processes=explorer_processes();
+    const auto process=std::find_if(processes.begin(),processes.end(),[&](const auto& item){return item.pid==pid;});
+    if(process==processes.end())
+        throw Error(3,"No verified Explorer window");
+    const bool active_only=!browser_window||require_foreground;
+    auto selected_child=[&] {
+        if(native_selection_supported())try {
+            auto tabs=read_native_tabs(frame,pid,process->created);
+            if(!tabs.empty())if(auto guid=read_active_tab(tabs.front())) {
+                auto tab=std::find_if(tabs.begin(),tabs.end(),[&](const auto& item){return item.guid==*guid;});
+                if(tab!=tabs.end())return tab->browser_window;
+            }
+        }catch(const Error&){}
+        return FindWindowExW(frame,nullptr,L"ShellTabWindowClass",nullptr);
+    };
+    const auto active_child=active_only?selected_child():nullptr;
+    if(active_child&&browser_window&&active_child!=browser_window)
+        throw Error(5,"Explorer selected tab changed");
+    ComPtr<IShellWindows> windows;
+    const auto hr=CoCreateInstance(CLSID_ShellWindows,nullptr,CLSCTX_LOCAL_SERVER,IID_PPV_ARGS(&windows));
+    if(FAILED(hr))throw Error(5,hr_error("Read Explorer views",hr));
+    auto collection=read_shell_collection(*windows.Get());
+    ComPtr<IShellView> result;
+    ComPtr<IShellBrowser> matched_browser;
+    ComPtr<IUnknown> matched_identity;
+    HWND matched{};
+    for(const auto& dispatch:collection.windows) {
+        ComPtr<IWebBrowser2> web;
+        SHANDLE_PTR top{};
+        if(FAILED(dispatch.As(&web))||FAILED(web->get_HWND(&top))||reinterpret_cast<HWND>(top)!=frame)continue;
+        ComPtr<IShellBrowser> browser;
+        HWND child{};
+        if(FAILED(resolve_browser(*web.Get(),frame,pid,browser,child)))continue;
+        if(browser_window&&child!=browser_window)continue;
+        if(active_child&&child!=active_child)continue;
+        if(active_only&&!active_child&&!IsWindowVisible(child))continue;
+        if(matched==child)continue;
+        if(matched)throw Error(5,"More than one Explorer tab is visible");
+        if(FAILED(browser->QueryActiveShellView(&result))||!result)throw Error(5,"Explorer tab view is unavailable");
+        if(identity&&FAILED(web.As(&matched_identity)))throw Error(5,"Explorer tab identity is unavailable");
+        matched_browser=browser;
+        matched=child;
+    }
+    if(!result||(active_only&&(GetForegroundWindow()!=frame||
+        (active_child?selected_child()!=matched:!IsWindowVisible(matched)))))
+        throw Error(5,"Explorer tab view changed or is unavailable");
+    if(owner)*owner=std::move(matched_browser);
+    if(identity)*identity=std::move(matched_identity);
+    return result;
+}
 ShellTabScan ShellTabEnumerator::scan(bool include_native) {
     ShellTabScan result;
     std::map<HWND, std::vector<NativeTab>> native_windows;
@@ -82,20 +152,10 @@ ShellTabScan ShellTabEnumerator::scan(bool include_native) {
         auto top = reinterpret_cast<HWND>(handle);
         DWORD pid = 0; GetWindowThreadProcessId(top, &pid);
         if (!IsWindow(top) || !allowed.contains(pid)) continue;
-        ComPtr<IServiceProvider> services;
         ComPtr<IShellBrowser> browser;
-        hr = web.As(&services);
-        if (SUCCEEDED(hr)) hr = services->QueryService(SID_STopLevelBrowser, IID_PPV_ARGS(&browser));
-        if (FAILED(hr)) {
-            if (services) hr = services->QueryService(IID_IShellBrowser, IID_PPV_ARGS(&browser));
-        }
-        if (FAILED(hr) || !browser) {
-            result.complete = false; result.warnings.push_back(hr_error("取得独立标签浏览器", hr)); continue;
-        }
         HWND child = nullptr;
-        hr = browser->GetWindow(&child);
-        DWORD child_pid = 0; GetWindowThreadProcessId(child, &child_pid);
-        if (FAILED(hr) || !child || !IsWindow(child) || child == top || child_pid != pid || !IsChild(top, child)) {
+        hr=resolve_browser(*web.Get(),top,pid,browser,child);
+        if (FAILED(hr)) {
             result.complete = false; result.warnings.push_back("未能验证独立标签子窗口，未将顶层窗口当成标签"); continue;
         }
         ShellTabObservation tab;
@@ -123,6 +183,7 @@ ShellTabScan ShellTabEnumerator::scan(bool include_native) {
         result.complete=false;result.warnings.push_back("Shell 集合在读取标签位置期间变化，保留上次未确认关闭的标签");
     }
     if(include_native&&native_inventory_supported()) {
+        result.native_inventory=true;
         std::vector<HWND> frames;EnumWindows([](HWND window,LPARAM value)->BOOL{wchar_t name[64]{};GetClassNameW(window,name,64);if(wcscmp(name,L"CabinetWClass")==0)reinterpret_cast<std::vector<HWND>*>(value)->push_back(window);return TRUE;},reinterpret_cast<LPARAM>(&frames));
         std::set<std::string> seen;
         for(auto window:frames) {
@@ -137,7 +198,7 @@ ShellTabScan ShellTabEnumerator::scan(bool include_native) {
                     if(existing==result.tabs.end()) {
                         auto key=std::to_string(pid)+":"+std::to_string(tab.process_started)+":"+std::to_string(reinterpret_cast<uintptr_t>(window))+":"+guid;seen.insert(key);
                         auto& identity=native_identities_[key];if(!identity)identity.Attach(new NativeObservationIdentity);
-                        ShellTabObservation observation;observation.window=window;observation.browser_window=tab.browser_window;observation.process_id=pid;observation.process_started=tab.process_started;observation.com_identity=identity;observation.native=tab;
+                        ShellTabObservation observation;observation.window=window;observation.browser_window=tab.browser_window;observation.process_id=pid;observation.process_started=tab.process_started;observation.com_identity=identity;observation.native=tab;observation.native_only=true;
                         result.tabs.push_back(std::move(observation));existing=std::prev(result.tabs.end());
                     }
                     existing->native=tab;existing->location_resolved=row->value("location_resolved",false);existing->location.filesystem_path.reset();

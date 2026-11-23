@@ -1,0 +1,3 @@
+#include "app_icon.h"
+
+IDI_SINAN_APP ICON "../../assets/sinan-icon/sinan.ico"

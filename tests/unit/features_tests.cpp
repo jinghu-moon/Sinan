@@ -81,12 +81,19 @@ int main() {
         ShellTabTracker tracker("features-test",Config{},[](DWORD,uint64_t){return ProcessLifetime::running;});
         ShellTabScan observed;for(int i=0;i<2;++i){ShellTabObservation t;t.com_identity.Attach(new TestIdentity);t.window=reinterpret_cast<HWND>(100);t.browser_window=reinterpret_cast<HWND>(uintptr_t(101+i));t.process_id=42;t.process_started=1000;t.location={L"D:\\same",L"same"};t.location_resolved=true;NativeTab n;n.window=t.window;n.browser_window=t.browser_window;n.process_id=42;n.process_started=1000;n.guid.Data1=1+i;t.native=n;observed.tabs.push_back(t);}tracker.reconcile(observed);
         auto ids=tracker.list();auto a=ids[0].at("tab_id").get<std::string>(),b=ids[1].at("tab_id").get<std::string>();
-        bool fail_native=false,fail_style=false,fail_icon=false,restore_style=false;int native_restores=0,style_restores=0,pending_style=0;std::map<unsigned,Json> actual;
+        bool fail_native=false,fail_style=false,fail_icon=false,restore_style=false,selected=true;int native_restores=0,style_restores=0,pending_style=0;std::map<unsigned,Json> actual;
+        unsigned located_guid=0;
         TabFeatures controller([&](const NativeTab& t,FeatureAction action,const Json& payload,bool){
+            if(action==FeatureAction::locate){located_guid=t.guid.Data1;return Json{{"active",selected},{"active_known",true}};}
             if(action==FeatureAction::restore){++native_restores;actual.erase(t.guid.Data1);return Json{{"icon_restored",true}};}
             if(fail_native)throw Error(3,"native rejected");actual[t.guid.Data1]=payload;return Json{{"protection_confirmed",true},{"native_window_icon_applied",true},{"icon_applied",false}};
         },[&](const NativeTab&,StyleAction action,const Json&,bool){if(action==StyleAction::restore){++style_restores;return Json{{"restoration_confirmed",restore_style}};}if(fail_style)throw Error(5,"style unavailable");if(pending_style>0){--pending_style;return Json{{"style_applied",false},{"pending",true},{"initializing",true},{"error",""}};}return Json{{"style_applied",true},{"icon_applied",!fail_icon}};},[](DWORD,uint64_t){return ProcessLifetime::running;});
         auto change=[&](const std::string& id,const char* action,bool enabled){return controller.change(tracker,Config{},{{"command",std::string("tabs.")+action},{"tab_id",id},{"enabled",enabled}});};
+        auto located=change(b,"locate",true);
+        expect(located_guid==2&&located.at("selection_confirmed")==true&&located.at("tab_id")==b,"locate selects the exact same-path tab identity");
+        expect(located.at("foreground_activated")==false&&located.at("partial")==true,"missing foreground window cannot confirm full success");
+        selected=false;located=change(a,"locate",true);
+        expect(located_guid==1&&located.at("selection_confirmed")==false&&located.at("partial")==true,"selection without readback is not confirmed");
         fail_native=true;rejects([&]{change(a,"pin",true);});expect(!controller.list(tracker,Config{})[0]["behavior"]["pinned"].get<bool>(),"failed guard cannot commit pin");fail_native=false;
         pending_style=2;auto ready=change(a,"pin",true);expect(!ready.at("partial").get<bool>()&&ready.at("icon_applied")==true&&pending_style==0,"pending XAML initialization retries before reporting confirmed appearance");
         fail_icon=true;auto missing_icon=change(a,"pin",true);expect(missing_icon.at("partial")==true&&missing_icon.at("icon_applied")==false&&missing_icon.at("native_window_icon_applied")==true,"native HWND icon cannot confirm rendered tab icon");fail_icon=false;

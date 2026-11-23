@@ -5,6 +5,7 @@
 #include <wrl/client.h>
 #include <vector>
 #include <map>
+#include <shobjidl.h>
 
 namespace sinan {
 struct ShellTabObservation {
@@ -17,11 +18,13 @@ struct ShellTabObservation {
     bool location_resolved = false;
     std::string warning;
     std::optional<NativeTab> native;
+    bool native_only = false;
 };
 struct ShellTabScan {
     std::vector<ShellTabObservation> tabs;
     bool complete = true;
     std::vector<std::string> warnings;
+    bool native_inventory = false;
 };
 // Own this object and every returned COM pointer on the same STA thread.
 class ShellTabEnumerator {
@@ -33,5 +36,8 @@ public:
     ShellTabEnumerator(const ShellTabEnumerator&) = delete;
     ShellTabEnumerator& operator=(const ShellTabEnumerator&) = delete;
     ShellTabScan scan(bool include_native=false);
+    Microsoft::WRL::ComPtr<IShellView> view(HWND frame, HWND browser_window={}, bool require_foreground=false,
+        Microsoft::WRL::ComPtr<IShellBrowser>* owner=nullptr, Microsoft::WRL::ComPtr<IUnknown>* identity=nullptr);
 };
+HRESULT shell_view_location(IShellView& view, TabLocation& location);
 }

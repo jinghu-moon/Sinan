@@ -8,17 +8,21 @@
 #include "platform/user_process.hpp"
 
 namespace sinan {
-bool workspace_directory_available(const std::wstring& path,DWORD timeout_ms) {
+std::optional<DWORD> workspace_path_attributes(const std::wstring& path,DWORD timeout_ms) {
     // UNC and mapped drives can block indefinitely. Cap concurrent probes and
     // let timed-out requests finish without retaining any agent/COM objects.
     static std::atomic<unsigned> outstanding{};
-    if(outstanding.fetch_add(1)>=4){--outstanding;return false;}
-    std::promise<bool> promise;auto future=promise.get_future();
-    try{std::thread([path,p=std::move(promise)]()mutable{auto attrs=GetFileAttributesW(path.c_str());p.set_value(attrs!=INVALID_FILE_ATTRIBUTES&&(attrs&FILE_ATTRIBUTE_DIRECTORY));--outstanding;}).detach();}
+    if(outstanding.fetch_add(1)>=4){--outstanding;return {};}
+    std::promise<DWORD> promise;auto future=promise.get_future();
+    try{std::thread([path,p=std::move(promise)]()mutable{p.set_value(GetFileAttributesW(path.c_str()));--outstanding;}).detach();}
     catch(...){--outstanding;throw;}
     auto end=GetTickCount64()+timeout_ms;
-    while(future.wait_for(std::chrono::milliseconds(0))!=std::future_status::ready){if(GetTickCount64()>=end)return false;MSG m{};while(PeekMessageW(&m,nullptr,0,0,PM_REMOVE)){TranslateMessage(&m);DispatchMessageW(&m);}Sleep(10);}
+    while(future.wait_for(std::chrono::milliseconds(0))!=std::future_status::ready){if(GetTickCount64()>=end)return {};MSG m{};while(PeekMessageW(&m,nullptr,0,0,PM_REMOVE)){TranslateMessage(&m);DispatchMessageW(&m);}Sleep(10);}
     return future.get();
+}
+bool workspace_directory_available(const std::wstring& path,DWORD timeout_ms) {
+    auto attrs=workspace_path_attributes(path,timeout_ms);
+    return attrs&&*attrs!=INVALID_FILE_ATTRIBUTES&&(*attrs&FILE_ATTRIBUTE_DIRECTORY);
 }
 void open_workspace_window(const std::wstring& path) {
     wchar_t windows[32768]{};if(!GetWindowsDirectoryW(windows,32768))throw Error(1,"Cannot resolve Explorer");

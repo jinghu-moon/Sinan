@@ -52,6 +52,18 @@ int main() {
         auto first = store.update([](Config& c) { c.depth.reset(); c.separator = L" · "; });
         expect(first.revision == 2, "revision increment");
         expect(store.load().separator == L" · " && !store.load().depth, "TOML roundtrip");
+        expect(!store.load().folder_sizes.enabled, "folder sizes default to off");
+        const auto size_settings = folder_sizes_from_json({{"unit_mode","custom"}, {"custom_unit_label","块"},
+            {"custom_unit_bytes","4096"}, {"decimal_places",2}});
+        expect(format_folder_size(0, size_settings, L".") == L"0.00 块", "known empty folder");
+        expect(format_folder_size(1572864, size_settings, L",") == L"384,00 块", "localized custom unit");
+        expect(format_folder_size(1048575, {}, L".") == L"1.00 MiB", "auto unit rounds across threshold");
+        expect(format_folder_size(1, size_settings, L".") == L"<0.01 块", "nonzero value below display precision");
+        auto exact = folder_sizes_from_json({{"custom_unit_bytes","1000000000000000000"},{"decimal_places",6}});
+        store.update([&](Config& next) { next.folder_sizes = exact; });
+        expect(store.load().folder_sizes == exact, "folder size options roundtrip exactly through TOML");
+        rejects([] { folder_sizes_from_json({{"decimal_places",-1}}); }, "reject negative precision");
+        rejects([] { folder_sizes_from_json({{"custom_unit_bytes","1000000000000000001"}}); }, "reject oversized unit");
         auto previous = read_file(store.path());
         rejects([&] { store.update([](Config& c) { c.depth = 0; }); }, "invalid edit");
         expect(read_file(store.path()) == previous, "invalid edits preserve file");

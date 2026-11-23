@@ -4,7 +4,10 @@
 #include <algorithm>
 
 namespace sinan {
-namespace {constexpr UINT input_update=WM_APP+0x542;}
+namespace {
+constexpr UINT input_update=WM_APP+0x542;
+constexpr UINT shortcut_priority_interval_ms=1000;
+}
 DirectoryShortcuts::DirectoryShortcuts() {
     WNDCLASSW cls{};cls.lpfnWndProc=procedure;cls.hInstance=GetModuleHandleW(nullptr);cls.lpszClassName=L"Sinan.DirectoryShortcuts.1";RegisterClassW(&cls);
     window_=CreateWindowExW(0,cls.lpszClassName,L"Sinan",0,0,0,0,0,HWND_MESSAGE,nullptr,cls.hInstance,this);
@@ -19,51 +22,53 @@ LRESULT CALLBACK DirectoryShortcuts::procedure(HWND window,UINT message,WPARAM w
 void DirectoryShortcuts::update(const Json& entries) {
     if(entries==config_&&(errors_.empty()||GetTickCount64()-retry_<5000))return;
     for(auto& [id,entry]:ids_)UnregisterHotKey(window_,id);
+    // UnregisterHotKey leaves queued messages behind. Discard them before reusing IDs.
+    if(window_) {
+        MSG message{};
+        while(PeekMessageW(&message,window_,WM_HOTKEY,WM_HOTKEY,PM_REMOVE)){}
+    }
     ids_.clear();events_.clear();errors_=Json::object();config_=entries;retry_=GetTickCount64();int id=0x6800;
     for(auto& e:entries)if(e.value("enabled",true)) {
         auto chord=parse_shortcut(e.value("shortcut",std::string{}));if(!chord.key)continue;
         auto key=e.at("id").get<std::string>();++id;
         if(!window_||!RegisterHotKey(window_,id,chord.modifiers,chord.key))errors_[key]=system_error("Global directory shortcut is occupied");
-        else ids_[id]=key;
+    else ids_[id]=e;
     }
 }
-std::deque<ShortcutEvent> DirectoryShortcuts::take(){return std::exchange(events_,{});}
+std::deque<DirectoryShortcutEvent> DirectoryShortcuts::take(){return std::exchange(events_,{});}
 Json DirectoryShortcuts::status()const{return {{"available",window_!=nullptr},{"bound",ids_.size()},{"errors",errors_},{"scope","global"},{"repeat","ignored"}};}
 thread_local ExplorerShortcuts* ExplorerShortcuts::current_=nullptr;
 ExplorerShortcuts::ExplorerShortcuts(SelectionReader reader,ForegroundProbe foreground)
-    :input_ready_(CreateEventW(nullptr,TRUE,FALSE,nullptr)),capture_ready_(CreateEventW(nullptr,FALSE,FALSE,nullptr)),
-    stopping_(CreateEventW(nullptr,TRUE,FALSE,nullptr)),read_selection_(std::move(reader)),foreground_(std::move(foreground)) {
-    if(!input_ready_||!capture_ready_||!stopping_)throw Error(1,system_error("Shortcut input events"));
+    :action_ready_(CreateEventW(nullptr,FALSE,FALSE,nullptr)),read_selection_(std::move(reader)),foreground_(std::move(foreground)) {
+    if(!action_ready_)throw Error(1,system_error("Shortcut action event"));
     if(!foreground_)foreground_=GetForegroundWindow;
-    if(!read_selection_)read_selection_=[](const NativeTab& tab)->std::optional<GUID>{
-        if(!native_selection_supported())return {};
-        DWORD pid{};if(!IsWindow(tab.window)||!GetWindowThreadProcessId(tab.window,&pid)||pid!=tab.process_id)return {};
-        Handle process(OpenProcess(PROCESS_VM_READ|PROCESS_QUERY_LIMITED_INFORMATION,FALSE,tab.process_id));
-        FILETIME created{},exited{},kernel{},user{};GUID selected{};SIZE_T count{};
-        if(!process||!GetProcessTimes(process.get(),&created,&exited,&kernel,&user))return {};
-        const auto started=(uint64_t(created.dwHighDateTime)<<32)|created.dwLowDateTime;
-        if(started!=tab.process_started||!ReadProcessMemory(process.get(),reinterpret_cast<void*>(tab.frame+native_field("active_guid")),&selected,sizeof(selected),&count)||count!=sizeof(selected))return {};
-        return selected;
-    };
+    if(!read_selection_)read_selection_=read_active_tab;
+}
+void ExplorerShortcuts::start_input() {
+    Handle input_ready(CreateEventW(nullptr,TRUE,FALSE,nullptr));
+    capture_ready_.emplace(CreateEventW(nullptr,FALSE,FALSE,nullptr));
+    stopping_.emplace(CreateEventW(nullptr,TRUE,FALSE,nullptr));
+    if(!input_ready||!*capture_ready_||!*stopping_)throw Error(1,system_error("Shortcut input events"));
     try {
         capture_thread_=std::thread([this]{capture();});
-        input_thread_=std::thread([this]{
-            current_=this;MSG message{};PeekMessageW(&message,nullptr,0,0,PM_NOREMOVE);input_id_=GetCurrentThreadId();SetEvent(input_ready_.get());
+        input_thread_=std::thread([this,ready=input_ready.get()]{
+            current_=this;MSG message{};PeekMessageW(&message,nullptr,0,0,PM_NOREMOVE);input_id_=GetCurrentThreadId();SetEvent(ready);
             while(GetMessageW(&message,nullptr,0,0)>0) {
                 if(message.message==input_update){
                     std::deque<std::function<void()>> commands;{std::lock_guard lock(command_mutex_);commands.swap(commands_);}
                     for(auto& command:commands)command();
-                }else {TranslateMessage(&message);DispatchMessageW(&message);}
+                }else if(message.message==WM_TIMER&&!message.hwnd&&message.wParam==priority_timer_)refresh_priority(true);
+                else {TranslateMessage(&message);DispatchMessageW(&message);}
             }
-            if(hook_)UnhookWindowsHookEx(hook_);hook_=nullptr;hooked_=false;bound_=0;current_=nullptr;
+            detach_input_hooks();current_=nullptr;
         });
-        WaitForSingleObject(input_ready_.get(),INFINITE);
-    }catch(...){SetEvent(stopping_.get());if(capture_thread_.joinable())capture_thread_.join();throw;}
+        WaitForSingleObject(input_ready.get(),INFINITE);
+    }catch(...){SetEvent(stopping_->get());if(capture_thread_.joinable())capture_thread_.join();throw;}
 }
 ExplorerShortcuts::~ExplorerShortcuts(){
     ++generation_;
     if(input_thread_.joinable()){PostThreadMessageW(input_id_,WM_QUIT,0,0);input_thread_.join();}
-    SetEvent(stopping_.get());if(capture_thread_.joinable())capture_thread_.join();
+    if(capture_thread_.joinable()){SetEvent(stopping_->get());capture_thread_.join();}
 }
 bool ExplorerShortcuts::post_input(std::function<void()> command) {
     {std::lock_guard lock(command_mutex_);commands_.push_back(std::move(command));}
@@ -71,13 +76,65 @@ bool ExplorerShortcuts::post_input(std::function<void()> command) {
 }
 void ExplorerShortcuts::configure(std::shared_ptr<const Settings> settings) {
     settings_=std::move(settings);
-    const bool enabled=!settings_->bindings.empty()&&!settings_->windows.empty();
-    if(!enabled&&hook_){UnhookWindowsHookEx(hook_);hook_=nullptr;pressed_.reset();consumed_.reset();}
-    if(enabled&&!hook_){
-        hook_=SetWindowsHookExW(WH_KEYBOARD_LL,keyboard,GetModuleHandleW(nullptr),0);
-        std::lock_guard lock(error_mutex_);hook_error_=hook_?"":system_error("Foreground keyboard hook");
+    if(settings_->bindings.empty()||settings_->windows.empty()){
+        detach_input_hooks();
+        return;
     }
-    hooked_=hook_!=nullptr;bound_=hook_?settings_->bindings.size():0;
+    if(!foreground_hook_){
+        foreground_hook_=SetWinEventHook(EVENT_SYSTEM_FOREGROUND,EVENT_SYSTEM_FOREGROUND,nullptr,foreground_changed,0,0,WINEVENT_OUTOFCONTEXT);
+        const auto error=foreground_hook_?std::string{}:system_error("Shortcut foreground notifications");
+        std::lock_guard lock(error_mutex_);foreground_error_=error;
+    }
+    refresh_priority(false);
+    bound_=hook_?settings_->bindings.size():0;
+}
+void ExplorerShortcuts::detach_input_hooks() {
+    if(priority_timer_)KillTimer(nullptr,std::exchange(priority_timer_,0));
+    if(foreground_hook_)UnhookWinEvent(std::exchange(foreground_hook_,nullptr));
+    if(hook_)UnhookWindowsHookEx(std::exchange(hook_,nullptr));
+    priority_window_=nullptr;
+    pressed_.reset();consumed_.reset();
+    hooked_=false;bound_=0;
+    std::lock_guard lock(error_mutex_);
+    hook_error_.clear();foreground_error_.clear();timer_error_.clear();capture_error_.clear();
+}
+void CALLBACK ExplorerShortcuts::foreground_changed(HWINEVENTHOOK,DWORD,HWND,LONG,LONG,DWORD,DWORD) {
+    if(current_)current_->refresh_priority(false);
+}
+void ExplorerShortcuts::refresh_priority(bool periodic) {
+    if(!settings_||settings_->bindings.empty()||settings_->windows.empty())return;
+    const auto foreground=foreground_();
+    const auto window=settings_->windows.contains(foreground)?foreground:nullptr;
+    const bool entered=std::exchange(priority_window_,window)!=window;
+    const bool keep_timer=window||!foreground_hook_;
+    if(keep_timer&&!priority_timer_){
+        priority_timer_=SetTimer(nullptr,0,shortcut_priority_interval_ms,nullptr);
+        const auto error=priority_timer_?std::string{}:system_error("Shortcut priority timer");
+        std::lock_guard lock(error_mutex_);timer_error_=error;
+    }else if(!keep_timer&&priority_timer_){
+        KillTimer(nullptr,std::exchange(priority_timer_,0));
+    }
+    if((window&&(entered||periodic))||(!hook_&&!periodic))install_keyboard_hook();
+}
+void ExplorerShortcuts::install_keyboard_hook() {
+    // Windows inserts each new hook at the head of its chain.
+    const auto next=SetWindowsHookExW(WH_KEYBOARD_LL,keyboard,GetModuleHandleW(nullptr),0);
+    if(!next){
+        const auto error=system_error("Foreground keyboard hook");
+        std::lock_guard lock(error_mutex_);hook_error_=error;
+        return;
+    }
+    if(hook_&&!UnhookWindowsHookEx(hook_)){
+        const auto code=GetLastError();
+        if(code!=ERROR_INVALID_HOOK_HANDLE){
+            UnhookWindowsHookEx(next);
+            std::lock_guard lock(error_mutex_);hook_error_=system_error("Replace foreground keyboard hook",code);
+            return;
+        }
+    }
+    if(hook_)++priority_rearms_;
+    hook_=next;hooked_=true;bound_=settings_->bindings.size();
+    std::lock_guard lock(error_mutex_);hook_error_.clear();
 }
 bool ExplorerShortcuts::on_key(UINT key,bool down,UINT modifiers,HWND foreground) {
     if(key>=256)return false;
@@ -89,10 +146,12 @@ bool ExplorerShortcuts::on_key(UINT key,bool down,UINT modifiers,HWND foreground
     for(size_t i=0;i<settings_->bindings.size();++i) {
         const auto& chord=settings_->bindings[i].chord;
         if(chord.key!=key||chord.modifiers!=(modifiers|MOD_NOREPEAT))continue;
+        const auto& action=settings_->bindings[i].action;
+        if(!window->second.frame&&action.starts_with("toggle_")&&shell_shortcut_action(action).empty())continue;
         const auto head=head_.load(std::memory_order_relaxed),next=(head+1)%pending_.size();
         if(next==tail_.load(std::memory_order_acquire)){++dropped_;return false;}
         pending_[head]={i,window->second,settings_->generation,GetTickCount64(),settings_};
-        head_.store(next,std::memory_order_release);SetEvent(capture_ready_.get());consumed_.set(key);return true;
+        head_.store(next,std::memory_order_release);SetEvent(capture_ready_->get());consumed_.set(key);return true;
     }
     return false;
 }
@@ -103,6 +162,7 @@ LRESULT CALLBACK ExplorerShortcuts::keyboard(int code,WPARAM message,LPARAM data
         if(key->flags&LLKHF_INJECTED)return CallNextHookEx(nullptr,code,message,data);
         if(message==WM_KEYUP||message==WM_SYSKEYUP){if(self->on_key(key->vkCode,false,0,nullptr))return 1;}
         else if(message==WM_KEYDOWN||message==WM_SYSKEYDOWN) {
+            if(key->vkCode<self->consumed_.size()&&self->consumed_.test(key->vkCode))return 1;
             // Most typing takes this path without even querying modifier state.
             if(!self->settings_||self->settings_->windows.empty())return CallNextHookEx(nullptr,code,message,data);
             bool candidate=false;for(auto& binding:self->settings_->bindings)if(binding.chord.key==key->vkCode){candidate=true;break;}
@@ -119,17 +179,20 @@ LRESULT CALLBACK ExplorerShortcuts::keyboard(int code,WPARAM message,LPARAM data
     return CallNextHookEx(nullptr,code,message,data);
 }
 void ExplorerShortcuts::update(const Json& config,const std::vector<NativeTab>& tabs,bool enabled) {
-    if(config!=config_||(!errors_.empty()&&GetTickCount64()-retry_>=5000)) {
-        config_=config;errors_=Json::object();bindings_.clear();retry_=GetTickCount64();int id=0x6700;
+    if(config!=config_) {
+        config_=config;bindings_.clear();
         for(auto it=config.begin();it!=config.end();++it) {
             auto chord=parse_shortcut(it.value().get<std::string>());if(!chord.key)continue;
-            // Only probe OS reservations. Never swallow this chord globally.
-            if(!RegisterHotKey(nullptr,++id,chord.modifiers,chord.key)){errors_[it.key()]=system_error("Shortcut is occupied");continue;}
-            UnregisterHotKey(nullptr,id);bindings_.push_back({it.key(),chord});
+            bindings_.push_back({it.key(),chord});
         }
     }
+    const bool has_targets=enabled&&!bindings_.empty()&&!tabs.empty();
+    if(!input_thread_.joinable()){
+        if(!has_targets)return;
+        start_input();
+    }
     auto settings=std::make_shared<Settings>();
-    if(enabled){settings->bindings=bindings_;for(auto& tab:tabs)settings->windows.try_emplace(tab.window,tab);}
+    if(has_targets){settings->bindings=bindings_;for(auto& tab:tabs)settings->windows.try_emplace(tab.window,tab);}
     if(published_&&(hooked_||settings->bindings.empty()||settings->windows.empty())&&published_->bindings==settings->bindings&&published_->windows.size()==settings->windows.size()&&
         std::equal(published_->windows.begin(),published_->windows.end(),settings->windows.begin(),[](const auto& a,const auto& b){
             const auto& x=a.second;const auto& y=b.second;
@@ -139,19 +202,29 @@ void ExplorerShortcuts::update(const Json& config,const std::vector<NativeTab>& 
     post_input([this,settings]{configure(settings);});
 }
 void ExplorerShortcuts::capture() {
-    HANDLE handles[]{stopping_.get(),capture_ready_.get()};
-    while(WaitForMultipleObjects(2,handles,FALSE,INFINITE)==WAIT_OBJECT_0+1) {
+    const HANDLE handles[]{stopping_->get(),capture_ready_->get()};
+    while (true) {
+        const auto wake=WaitForMultipleObjects(2,handles,FALSE,INFINITE);
+        if (wake!=WAIT_OBJECT_0+1&&wake!=WAIT_TIMEOUT)return;
         auto tail=tail_.load(std::memory_order_relaxed);
         while(tail!=head_.load(std::memory_order_acquire)) {
             auto pending=std::move(pending_[tail]);tail=(tail+1)%pending_.size();tail_.store(tail,std::memory_order_release);
-            if(WaitForSingleObject(stopping_.get(),0)==WAIT_OBJECT_0)return;
+            if(WaitForSingleObject(handles[0],0)==WAIT_OBJECT_0)return;
             if(pending.generation!=generation_||GetTickCount64()-pending.time>250||foreground_()!=pending.tab.window){++dropped_;continue;}
             try {
-                auto selected=read_selection_(pending.tab);
+                const auto& action=pending.settings->bindings[pending.binding].action;
+                std::optional<GUID> selected;
+                if(pending.tab.frame)selected=read_selection_(pending.tab);
+                else selected=GUID{};
                 if(!selected||pending.generation!=generation_||GetTickCount64()-pending.time>250||foreground_()!=pending.tab.window){++dropped_;continue;}
-                ShortcutEvent event{pending.settings->bindings[pending.binding].action,pending.tab.window,*selected,pending.tab.process_started};
-                std::lock_guard lock(event_mutex_);if(events_.size()<16)events_.emplace_back(pending.generation,std::move(event));else ++dropped_;
-            }catch(const std::exception& error){std::lock_guard lock(error_mutex_);hook_error_=error.what();++dropped_;}
+                ShortcutEvent event{action,pending.tab.window,*selected,pending.tab.process_started,pending.tab.process_id,
+                    pending.settings->bindings[pending.binding].chord};
+                std::lock_guard lock(event_mutex_);
+                if(events_.size()<16){
+                    events_.emplace_back(pending.generation,std::move(event));
+                    SetEvent(action_ready_.get());
+                }else ++dropped_;
+            }catch(const std::exception& error){std::lock_guard lock(error_mutex_);capture_error_=error.what();++dropped_;}
         }
     }
 }
@@ -160,9 +233,17 @@ std::deque<ShortcutEvent> ExplorerShortcuts::take(){
     std::deque<ShortcutEvent> result;for(auto& [generation,event]:pending)if(generation==generation_)result.push_back(std::move(event));return result;
 }
 Json ExplorerShortcuts::status(){
-    auto errors=errors_;{std::lock_guard lock(error_mutex_);if(!hook_error_.empty())errors["listener"]=hook_error_;}
-    return {{"available",input_id_.load()!=0},{"hook_active",hooked_.load()},{"input_thread_id",input_id_.load()},
+    Json errors=Json::object();
+    {
+        std::lock_guard lock(error_mutex_);
+        if(!hook_error_.empty())errors["listener"]=hook_error_;
+        if(!foreground_error_.empty())errors["priority_foreground"]=foreground_error_;
+        if(!timer_error_.empty())errors["priority_timer"]=timer_error_;
+        if(!capture_error_.empty())errors["capture"]=capture_error_;
+    }
+    return {{"available",true},{"hook_active",hooked_.load()},{"input_thread_id",input_id_.load()},
         {"bound",bound_.load()},{"errors",errors},{"dropped",dropped_.load()},{"scope","foreground verified Explorer only"},
+        {"priority_rearms",priority_rearms_.load()},{"priority_interval_ms",shortcut_priority_interval_ms},
         {"input_dispatch","dedicated thread; selection reads on separate worker"},{"repeat","ignored"}};
 }
 namespace {constexpr UINT notification_message=WM_APP+0x541;}

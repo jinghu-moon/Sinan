@@ -9,7 +9,7 @@ $currentPath = (Resolve-Path -LiteralPath $CurrentExecutable).Path
 $sourcePath = (Resolve-Path -LiteralPath $NewExecutable).Path
 $dataPath = [IO.Path]::GetFullPath($DataDirectory)
 if ($currentPath -eq $sourcePath) { throw 'Select a separate build executable as the update source.' }
-$runtimeNames = @('sinan-hook.dll', 'sinan-layout.dll', 'sinan-features.dll', 'sinan-style.dll', 'sinan-login.exe', 'sinan-symbols.exe', 'sinan-agent.exe')
+$runtimeNames = @('sinan-hook.dll', 'sinan-layout.dll', 'sinan-features.dll', 'sinan-style.dll', 'sinan-login.exe', 'sinan-symbols.exe', 'sinan-folder-sizes.exe', 'sinan-folder-view.dll', 'sinan-agent.exe')
 foreach ($runtimeName in $runtimeNames) {
     $runtimeSource = Join-Path (Split-Path -Parent $sourcePath) $runtimeName
     $runtimeTarget = Join-Path (Split-Path -Parent $currentPath) $runtimeName

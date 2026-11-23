@@ -10,6 +10,13 @@
 namespace sinan {
 namespace {
 constexpr uint32_t max_message = 1024 * 1024;
+DWORD operation_timeout(std::string_view command) {
+    if(command=="workspace.restore"||command=="tabs.batch")return 45000;
+    if(command=="tabs.locate"||command=="directories.open"||command=="explorer.locate_clipboard"||command=="transfer.complete"||
+       command=="explorer.reopen_closed_tab"||command=="explorer.merge_duplicate_tabs"||
+       command=="explorer.open_parent_tab"||command=="archives.open")return 20000;
+    return 0;
+}
 class Operation {
     Handle event_{CreateEventW(nullptr, TRUE, FALSE, nullptr)};
 public:
@@ -89,7 +96,7 @@ void verify_peer_process(DWORD pid,PeerRole role) {
     auto matches=[&](const wchar_t* name){std::error_code ec;return fs::equivalent(fs::path(image),directory/name,ec)&&!ec;};
     // In-process loopback allows transport tests without weakening cross-process roles.
     bool allowed=pid==GetCurrentProcessId() || (role==PeerRole::agent ? matches(L"sinan-agent.exe") :
-        matches(L"sinan.exe")||matches(L"sinan-panel.exe"));
+        matches(L"sinan.exe")||matches(L"sinan-panel.exe")||matches(L"sinan-gui.exe"));
     if(!allowed)throw Error(4,"IPC peer has the wrong role or distribution directory");
     HANDLE raw = nullptr;
     if (!OpenProcessToken(process.get(), TOKEN_QUERY, &raw)) throw Error(4, system_error("查询 IPC 对端用户"));
@@ -102,7 +109,8 @@ void verify_peer_process(DWORD pid,PeerRole role) {
     if (actual != current_sid()) throw Error(4, "IPC 对端不属于当前用户");
 }
 std::optional<Json> agent_request(const fs::path& root, Json request, DWORD timeout) {
-    auto command=request.value("command",std::string{});if(command=="workspace.restore"||command=="tabs.batch")timeout=std::max<DWORD>(timeout,45000);
+    auto command=request.value("command",std::string{});
+    timeout=std::max(timeout,operation_timeout(command));
     auto name = agent_endpoint(root);
     HANDLE connected = INVALID_HANDLE_VALUE;
     auto connect_deadline = GetTickCount64() + timeout;
@@ -121,6 +129,8 @@ std::optional<Json> agent_request(const fs::path& root, Json request, DWORD time
     ULONG server = 0;
     if (!GetNamedPipeServerProcessId(pipe.get(), &server)) throw Error(4, "无法验证代理服务进程");
     verify_peer_process(server);
+    if(command=="tabs.locate"||command=="directories.open"||command=="explorer.locate_clipboard"||command=="archives.open"||
+       (command=="transfer.complete"&&request.value("open_target",false)))AllowSetForegroundWindow(server);
     GUID guid{}; if (FAILED(CoCreateGuid(&guid))) throw Error(1, "无法创建请求 ID");
     wchar_t id[40]{}; StringFromGUID2(guid, id, 40);
     request["request_id"] = utf8(id); request["protocol_version"] = 1; request["product"]="Sinan";
@@ -157,7 +167,7 @@ struct PipeServer::Impl {
 };
 PipeServer::PipeServer(const fs::path& root) : impl_(std::make_unique<Impl>(root)) {}
 PipeServer::~PipeServer() = default;
-bool PipeServer::poll(const std::function<Json(const Json&)>& handler, DWORD wait) {
+bool PipeServer::poll(const std::function<Json(const Json&)>& handler, DWORD wait, HANDLE message_wake) {
     auto& state = *impl_;
     if (!state.pending) {
         ResetEvent(state.connect.overlap.hEvent);
@@ -168,7 +178,12 @@ bool PipeServer::poll(const std::function<Json(const Json&)>& handler, DWORD wai
         }
         state.pending = true;
     }
-    if (WaitForSingleObject(state.connect.overlap.hEvent, wait) != WAIT_OBJECT_0) return false;
+    const HANDLE events[]{state.connect.overlap.hEvent, message_wake};
+    const auto ready = message_wake
+        ? MsgWaitForMultipleObjectsEx(2, events, wait, QS_ALLINPUT, MWMO_INPUTAVAILABLE)
+        : WaitForSingleObject(events[0], wait);
+    if (ready == WAIT_FAILED) throw Error(1, system_error("等待代理事件"));
+    if (ready != WAIT_OBJECT_0) return false;
     state.pending = false;
     try {
         ULONG client = 0;
@@ -176,7 +191,8 @@ bool PipeServer::poll(const std::function<Json(const Json&)>& handler, DWORD wai
         verify_peer_process(client,PeerRole::client);
         auto deadline = GetTickCount64() + 5000;
         auto request = receive_json(state.pipe.get(), deadline);
-        auto command=request.value("command",std::string{});if(command=="workspace.restore"||command=="tabs.batch")deadline=GetTickCount64()+45000;
+        auto command=request.value("command",std::string{});
+        if(auto budget=operation_timeout(command);budget>5000)deadline=GetTickCount64()+budget;
         Json response{{"product","Sinan"},{"protocol_version", 1}, {"request_id", request.value("request_id", "")}};
         try {
             if (request.value("product",std::string{})!="Sinan" || request.value("protocol_version", 0) != 1 || response["request_id"] == "") throw Error(2, "请求协议无效");

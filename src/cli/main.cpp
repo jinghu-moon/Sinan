@@ -121,16 +121,45 @@ int run(int argc, wchar_t** argv) {
     sub(agent, "status", "查看观察代理状态")->callback([&]() {
         emit({{"action","agent.status"}},true);
     });
+    auto* startup=sub(&app,"startup","Manage Sinan startup for the current Windows user");
+    startup->require_subcommand(1,1);
+    sub(startup,"on","Start Sinan in the background at Windows sign-in")->callback([&]{
+        emit({{"action","startup.set"},{"enabled",true}});
+    });
+    sub(startup,"off","Disable background startup at Windows sign-in")->callback([&]{
+        emit({{"action","startup.set"},{"enabled",false}});
+    });
+    sub(startup,"status","Check login startup configuration and registration")->callback([&]{
+        emit({{"action","startup.status"}},true);
+    });
+    auto* tray=sub(&app,"tray","Manage the optional notification area icon");
+    tray->require_subcommand(1,1);
+    sub(tray,"on","Show the icon when the agent runs")->callback([&]{
+        emit({{"action","tray.set"},{"enabled",true}});
+    });
+    sub(tray,"off","Hide the icon")->callback([&]{
+        emit({{"action","tray.set"},{"enabled",false}});
+    });
+    sub(tray,"status","Check the icon setting and registration")->callback([&]{
+        emit({{"action","tray.status"}},true);
+    });
     auto* tabs = sub(&app, "tabs", "读取真实标签，管理逐标签显示层级"); tabs->require_subcommand(1, 1);
-    sub(tabs, "list", "列出标签身份、路径、有效层级及预览标题")->callback([&]() {
-        auto result = call({{"action", "tabs.list"}});
+    std::string tab_query;
+    auto* tabs_list=sub(tabs, "list", "列出标签身份、路径、有效层级及预览标题");
+    auto* query_option=tabs_list->add_option("--query",tab_query,"按路径、标题或标签 ID 搜索，空白分隔多个关键词");
+    tabs_list->callback([&]() {
+        Json request{{"action","tabs.list"}};
+        if(query_option->count())request["query"]=tab_query;
+        auto result=call(std::move(request));
         if (!json && result_code == 0) {
             for (const auto& tab : result.at("tabs")) {
                 std::cout << tab.at("tab_id").get<std::string>() << "  depth=" << tab.at("depth").dump()
-                    << "  source=" << tab.at("source").get<std::string>() << '\n'
+                    << "  source=" << tab.at("source").get<std::string>() << "  window=" << tab.at("window") << '\n'
                     << "  " << (tab.at("path").is_null() ? tab.at("original_title").get<std::string>() : tab.at("path").get<std::string>()) << '\n'
                     << "  预览: " << tab.at("preview_title").get<std::string>() << '\n';
             }
+            if(result.contains("match_count"))std::cout<<"匹配标签 "<<result.at("match_count")<<" / "<<result.at("tab_count")<<'\n';
+            if(!result.value("scan_complete",false))std::cout<<"本次扫描不完整，列表可能缺少标签。\n";
             std::cout << "模式: " << result.value("mode", "observe") << "；逐标签应用状态请使用 --json 查看。\n";
         } else output(result, true);
     });
@@ -162,7 +191,7 @@ int run(int argc, wchar_t** argv) {
     for(const auto command:{"style-reset","locate","capabilities","visual-probe"}) {
         auto* operation=sub(tabs,command,"Inspect capabilities, locate tab or reset temporary style");operation->add_option("tab_id",tab_id)->required();
         operation->callback([&,command]{
-        emit({{"action",std::string("tabs.")+command},{"tab_id",tab_id}});
+        emit({{"action",std::string("tabs.")+command},{"tab_id",tab_id}},std::string_view(command)!="locate"||json);
     });
     }
     auto* tab_style=sub(tabs,"style","Apply temporary appearance JSON (missing fields inherit; system restores native value)");
@@ -175,27 +204,33 @@ int run(int argc, wchar_t** argv) {
     batch->add_option("operation",batch_operation)->required()->check(CLI::IsMember({"pin","protect","lock"}));batch->add_option("state",batch_state)->required()->check(CLI::IsMember({"on","off"}));
     batch->add_option("tab_ids",batch_ids)->required()->expected(1,100);
     batch->callback([&]{auto result=application_action(root(),{{"action","tabs.batch"},{"operation",batch_operation},{"enabled",batch_state=="on"},{"tab_ids",batch_ids}});result_code=result.at("code");output(result.at("result"),true);});
-    auto* shortcuts=sub(&app,"shortcuts","Configure foreground Explorer shortcuts");shortcuts->require_subcommand(1,1);
+    auto* shortcuts=sub(&app,"shortcuts","Configure Explorer and global action shortcuts");shortcuts->require_subcommand(1,1);
     sub(shortcuts,"show","Show chords; empty means unbound")->callback([&]{
         emit({{"action","features.get"},{"group","shortcuts"}});
     });
-    std::string shortcut_action,chord;
-    auto* shortcut_set=sub(shortcuts,"set","Set toggle_pin | toggle_protection | toggle_directory_lock");
+    std::string shortcut_action,chord,preset_folder;
+    auto* shortcut_set=sub(shortcuts,"set","Bind an action shown by shortcuts show");
     shortcut_set->add_option("action",shortcut_action)->required();shortcut_set->add_option("chord",chord)->required();
+    auto* preset=shortcut_set->add_option("--name",preset_folder,"Preset for new_folder; empty uses Explorer rename interaction");
     shortcut_set->callback([&]{
-        emit({{"action","shortcuts.set"},{"id",shortcut_action},{"chord",chord}});
+        Json request{{"action","shortcuts.set"},{"id",shortcut_action},{"chord",chord}};
+        if(preset->count())request["name"]=preset_folder;
+        emit(std::move(request));
     });
     auto* entries=sub(&app,"entries","Directory quick entries, aliases and global shortcuts");entries->require_subcommand(1,1);
     sub(entries,"list","Show saved directory entries")->callback([&]{
         output(call({{"action","features.get"},{"group","directories"}}).at("entries"),true);
     });
-    std::string entry_id,entry_name,entry_path,entry_chord,entry_title="alias_depth";bool entry_descendants=false,entry_replace=false,entry_disabled=false;
+    std::string entry_id,entry_name,entry_path,entry_chord,entry_scope,entry_title="alias_depth";bool entry_descendants=false,entry_replace=false,entry_disabled=false;
     auto* entry_add=sub(entries,"add","Add an entry; --replace explicitly replaces an existing ID");
     entry_add->add_option("id",entry_id)->required();entry_add->add_option("path",entry_path)->required();entry_add->add_option("--name",entry_name)->required();
     entry_add->add_option("--shortcut",entry_chord);entry_add->add_option("--title",entry_title)->check(CLI::IsMember({"off","alias","alias_depth"}));
+    auto* scope_option=entry_add->add_option("--scope",entry_scope,"global | explorer")->check(CLI::IsMember({"global","explorer"}));
     entry_add->add_flag("--descendants",entry_descendants);entry_add->add_flag("--replace",entry_replace);entry_add->add_flag("--disabled",entry_disabled);
     entry_add->callback([&]{
-        emit({{"action","entries.put"},{"id",entry_id},{"path",entry_path},{"name",entry_name},{"shortcut",entry_chord},{"title",entry_title},{"descendants",entry_descendants},{"replace",entry_replace},{"enabled",!entry_disabled}});
+        Json request{{"action","entries.put"},{"id",entry_id},{"path",entry_path},{"name",entry_name},{"shortcut",entry_chord},{"title",entry_title},{"descendants",entry_descendants},{"replace",entry_replace},{"enabled",!entry_disabled}};
+        if(scope_option->count())request["scope"]=entry_scope;
+        emit(std::move(request));
     });
     auto* entry_remove=sub(entries,"remove","Remove a directory entry");entry_remove->add_option("id",entry_id)->required();
     entry_remove->callback([&]{
@@ -280,6 +315,39 @@ int run(int argc, wchar_t** argv) {
         real_root();emit({{"action","path.remove"}},json);
     });
     auto* explorer = sub(&app, "explorer", "管理当前用户当前会话的 Explorer"); explorer->require_subcommand(1, 1);
+    auto* double_click=sub(explorer,"double-click-parent","双击文件列表空白处返回父目录");
+    double_click->require_subcommand(1,1);
+    sub(double_click,"on","启用双击返回")->callback([&]{emit({{"action","double-click-parent.set"},{"enabled",true}});});
+    sub(double_click,"off","停用双击返回")->callback([&]{emit({{"action","double-click-parent.set"},{"enabled",false}});});
+    sub(double_click,"status","查看双击返回状态")->callback([&]{emit({{"action","double-click-parent.status"}});});
+    auto* external_tabs=sub(explorer,"external-tabs","将外部打开的目录放到资源管理器新标签");
+    external_tabs->require_subcommand(1,1);
+    sub(external_tabs,"on","启用外部目录标签化")->callback([&]{emit({{"action","external-tabs.set"},{"enabled",true}},json);});
+    sub(external_tabs,"off","停用外部目录标签化")->callback([&]{emit({{"action","external-tabs.set"},{"enabled",false}},json);});
+    sub(external_tabs,"status","查看外部目录标签化状态")->callback([&]{emit({{"action","external-tabs.status"}},json);});
+    auto* search_box=sub(explorer,"search-box","管理资源管理器地址栏右侧的搜索框");
+    search_box->require_subcommand(1,1);
+    sub(search_box,"hide","隐藏搜索框")->callback([&]{emit({{"action","search-box.set"},{"hidden",true},{"connect",true}});});
+    sub(search_box,"show","恢复搜索框")->callback([&]{emit({{"action","search-box.set"},{"hidden",false}});});
+    sub(search_box,"status","查看搜索框配置与实测状态")->callback([&]{emit({{"action","search-box.status"}});});
+    auto* everything=sub(explorer,"everything-search","为资源管理器原生搜索接入 Everything");
+    everything->require_subcommand(1,1);
+    sub(everything,"on","启用 Everything 检索后端")->callback([&]{emit({{"action","everything-search.set"},{"enabled",true}});});
+    sub(everything,"off","停用 Everything 检索后端")->callback([&]{emit({{"action","everything-search.set"},{"enabled",false}});});
+    sub(everything,"status","查看原生搜索接入状态")->callback([&]{emit({{"action","everything-search.status"}});});
+    std::string search_scope;
+    auto* scope = sub(everything, "scope", "设置搜索范围");
+    scope->add_option("range", search_scope, "current-folder 或 all-drives")
+        ->check(CLI::IsMember({"current-folder","all-drives"}))->required();
+    scope->callback([&]{emit({{"action","everything-search.scope"},{"scope",search_scope}});});
+    std::string search_directory,search_query;
+    unsigned search_limit=100;
+    auto* query_everything=sub(everything,"query","通过 Everything SDK 查询指定目录");
+    query_everything->add_option("directory",search_directory)->required();
+    query_everything->add_option("query",search_query)->required();
+    query_everything->add_option("--limit",search_limit)->check(CLI::Range(1u,1000u));
+    query_everything->callback([&]{emit({{"action","everything-search.query"},{"directory",search_directory},
+        {"query",search_query},{"limit",search_limit}});});
     bool force = false, yes = false;
     auto* restart = sub(explorer, "restart", "重启 Explorer（当前仅提供显式强制模式）");
     restart->add_flag("--force", force, "允许强制结束当前会话的 Explorer，可能中断复制等操作");
@@ -295,6 +363,46 @@ int run(int argc, wchar_t** argv) {
         emit({{"action","restart"},{"force",force}},json);
     });
     auto* actions=sub(&app,"actions","Discover and execute shared application actions");actions->require_subcommand(1,1);
+    auto* archives=sub(&app,"archives","Configure extraction and manage archive jobs");
+    archives->require_subcommand(1,1);
+    sub(archives,"settings","Show configured archive tools and format rules")->callback([&]{
+        output(call({{"action","features.get"},{"group","archives"}}),true);
+    });
+    std::string archive_settings_file,archive_job_id;
+    auto* archive_configure=sub(archives,"configure","Save archive settings from a JSON file");
+    archive_configure->add_option("file",archive_settings_file)->required();
+    archive_configure->callback([&]{
+        const auto file=fs::path(wide(archive_settings_file));
+        if(fs::file_size(file)>200000)throw Error(2,"Archive settings file is too large");
+        const auto expected=call({{"action","features.get"},{"group","archives"}});
+        emit({{"action","features.save"},{"group","archives"},{"expected",expected},
+            {"value",Json::parse(read_file(file))}},json);
+    });
+    sub(archives,"jobs","List extraction jobs")->callback([&]{emit({{"action","archives.jobs"}},true);});
+    auto* archive_cancel=sub(archives,"cancel","Cancel an extraction job");
+    archive_cancel->add_option("id",archive_job_id)->required();
+    archive_cancel->callback([&]{emit({{"action","archives.cancel"},{"id",archive_job_id}},json);});
+    auto* archive_open=sub(archives,"open","Open an extracted result in Explorer");
+    archive_open->add_option("id",archive_job_id)->required();
+    archive_open->callback([&]{emit({{"action","archives.open"},{"id",archive_job_id}},json);});
+    auto* scripts=sub(&app,"scripts","Manage PowerShell actions");scripts->require_subcommand(1,1);
+    sub(scripts,"list","List registered scripts")->callback([&]{
+        output(call({{"action","features.get"},{"group","scripts"}}).at("entries"),true);
+    });
+    std::string script_id,script_path,script_name,script_scope="global",script_shortcut;
+    bool script_replace=false;
+    auto* script_add=sub(scripts,"add","Register a PowerShell script");
+    script_add->add_option("id",script_id)->required();
+    script_add->add_option("path",script_path)->required();
+    script_add->add_option("--name",script_name)->required();
+    script_add->add_option("--scope",script_scope)->check(CLI::IsMember({"global","explorer"}));
+    script_add->add_option("--shortcut",script_shortcut);
+    script_add->add_flag("--replace",script_replace);
+    script_add->callback([&]{emit({{"action","scripts.put"},{"id",script_id},{"path",script_path},
+        {"name",script_name},{"scope",script_scope},{"shortcut",script_shortcut},{"replace",script_replace}});});
+    auto* script_remove=sub(scripts,"remove","Remove a registered script");
+    script_remove->add_option("id",script_id)->required();
+    script_remove->callback([&]{emit({{"action","scripts.remove"},{"id",script_id}});});
     std::string query,action_id,parameters="{}";
     auto* list_actions=sub(actions,"list","Search bilingual names and keywords without starting Agent");
     list_actions->add_option("--query",query);list_actions->callback([&]{emit({{"action","actions.list"},{"query",query}});});

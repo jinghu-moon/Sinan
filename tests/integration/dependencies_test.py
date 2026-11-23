@@ -16,7 +16,7 @@ def closure(name):
             continue
         result.add(current)
         tree = ET.parse(projects[current])
-        pending.extend(Path(e.attrib["Include"]).stem for e in tree.findall(".//m:ProjectReference", ns))
+        pending.extend(Path(e.attrib["Include"]).stem for e in tree.findall("./m:ItemGroup/m:ProjectReference", ns))
     return result
 
 # Build ordering references on the executable include runtime artifacts. Inspect
@@ -28,6 +28,8 @@ if "sinan_tui" in projects:
     assert "sinan_agent_runtime" not in closure("sinan_tui")
 else:
     assert not {"component", "dom", "screen"} & projects.keys()
+if "sinan_panel" in projects:
+    assert not {"sinan_agent_runtime", "sinan_tui", "component", "dom", "screen"} & closure("sinan_panel")
 cli = (source / "src/cli/main.cpp").read_text(encoding="utf-8")
 for forbidden in ("ConfigStore", "require_agent_result", "agent_request", '"agent/runtime.hpp"'):
     assert forbidden not in cli, forbidden

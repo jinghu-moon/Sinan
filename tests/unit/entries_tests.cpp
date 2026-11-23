@@ -27,6 +27,11 @@ int main(){try{
     expect(directory_key(L"\\\\server\\share\\a\\..\\b\\")==L"\\\\SERVER\\SHARE\\B","UNC normalization");
     expect(directory_key(L"D:\\Ärger")==directory_key(L"d:\\ärger"),"Windows Unicode case mapping");
     expect(directory_key(L"\\\\?\\D:\\Projects\\Sinan")==directory_key(entry.path),"extended drive path");
+    expect(directory_parent(L"d:/Projects/Sinan/.")==L"d:\\Projects","parent normalizes the path");
+    expect(directory_parent(L"D:\\Projects")==L"D:\\","a first-level directory opens the drive root");
+    expect(!directory_parent(L"D:\\"),"the drive root has no filesystem parent");
+    expect(directory_parent(L"\\\\server\\share\\folder")==L"\\\\server\\share"&&
+        !directory_parent(L"\\\\server\\share\\"),"the UNC share root bounds parent navigation");
     rejects([&]{auto e=entry;e.path=L"D:relative";validate_entries({e});});
     rejects([&]{auto e=entry;e.path=L"shell:Downloads";validate_entries({e});});
     rejects([&]{auto e=entry;e.name=L"bad\nname";validate_entries({e});});
@@ -38,7 +43,11 @@ int main(){try{
     expect(runtime_policy_from_json(runtime_policy_json(policy)).defaults==policy.defaults,"title hook receives aliases");
     rejects([&]{auto f=config.features;f["shortcuts"]["toggle_pin"]="Alt+Ctrl+1";validate_features(f);});
     rejects([&]{auto f=config.features;f["tab_behavior"]["pinned_position"]="middle";validate_features(f);});
-    auto legacy=config_json(Config{});legacy.erase("directories");legacy["tab_behavior"].erase("pinned_position");legacy["schema_version"]=3;
+    auto legacy=config_json(Config{});legacy.erase("directories");legacy.erase("scripts");legacy["tab_behavior"].erase("pinned_position");legacy["schema_version"]=3;
+    legacy.erase("navigation");
+    legacy["shortcuts"].erase("open_parent_tab");
+    expect(!config_from_json(legacy).double_click_parent&&
+        config_from_json(legacy).features.at("shortcuts").at("open_parent_tab")=="","older configurations load new controls disabled");
     expect(config_from_json(legacy).features.at("directories").at("entries").empty(),"schema3 loads with safe defaults");
     std::vector<std::string> tabs{"a","p","b","q","c"},pins{"p","q"};
     expect(dock_order(tabs,pins,"left")==std::vector<std::string>({"p","q","a","b","c"}),"left stable partition");
@@ -63,6 +72,13 @@ int main(){try{
         expect(shortcuts.status().at("bound")==0&&!shortcuts.status().at("errors").empty(),"OS collision reported");
         UnregisterHotKey(nullptr,0x77a0);shortcuts.update(Json::array());shortcuts.update(Json::array({entry_json(e)}));
         expect(shortcuts.status().at("bound")==1&&shortcuts.status().at("errors").empty(),"shortcut rebound after collision release");
+        auto host=FindWindowExW(HWND_MESSAGE,nullptr,L"Sinan.DirectoryShortcuts.1",nullptr);
+        expect(host&&PostMessageW(host,WM_HOTKEY,0x6801,MAKELPARAM(chord.modifiers&~MOD_NOREPEAT,chord.key)),"queue old directory shortcut");
+        auto replacement=e;replacement.id="replacement";shortcuts.update(Json::array({entry_json(replacement)}));
+        MSG message{};while(PeekMessageW(&message,host,WM_HOTKEY,WM_HOTKEY,PM_REMOVE))DispatchMessageW(&message);
+        expect(shortcuts.take().empty(),"queued hotkey cannot open the replacement binding");
+        replacement.enabled=false;shortcuts.update(Json::array({entry_json(replacement)}));
+        expect(shortcuts.status().at("bound")==0,"disabled entry releases its global shortcut");
         shortcuts.update(Json::array());expect(RegisterHotKey(nullptr,0x77a0,chord.modifiers,chord.key)!=FALSE,"removed shortcut released");UnregisterHotKey(nullptr,0x77a0);
     }else throw std::runtime_error("Test chord unexpectedly occupied");
     std::cout<<checks<<" entry/docking checks passed\n";return 0;

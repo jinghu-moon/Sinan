@@ -68,12 +68,12 @@ std::span<const unsigned char> Image::at(uint32_t rva,size_t size) const {
 }
 bool Image::executable(uint32_t rva) const {for(auto& s:sections_)if(rva>=s.rva&&rva-s.rva<s.size)return (s.flags&IMAGE_SCN_MEM_EXECUTE)&&!(s.flags&IMAGE_SCN_MEM_WRITE);return false;}
 bool Image::readonly_data(uint32_t rva) const {for(auto& s:sections_)if(rva>=s.rva&&rva-s.rva<s.size)return !(s.flags&(IMAGE_SCN_MEM_EXECUTE|IMAGE_SCN_MEM_WRITE))&&(s.flags&IMAGE_SCN_MEM_READ);return false;}
-uint32_t Image::function_size(uint32_t rva)const {
+uint32_t Image::function_size(uint32_t rva,uint32_t limit)const {
     if(exception_size_>16*1024*1024||exception_size_%sizeof(RUNTIME_FUNCTION))throw Error(3,"Invalid x64 unwind table");
     auto table=at(exception_rva_,exception_size_);
     for(size_t i=0;i<table.size();i+=sizeof(RUNTIME_FUNCTION)){
         RUNTIME_FUNCTION f{};std::memcpy(&f,table.data()+i,sizeof(f));
-        if(f.BeginAddress==rva&&f.EndAddress>rva&&f.EndAddress-rva<=4096)return f.EndAddress-rva;
+        if(f.BeginAddress==rva&&f.EndAddress>rva&&f.EndAddress-rva<=limit)return f.EndAddress-rva;
     }throw Error(3,"Function has no bounded x64 unwind entry");
 }
 Json Image::identity()const {wchar_t guid[40]{};StringFromGUID2(pdb_guid,guid,40);return {{"sha256",sha256},{"machine",machine},{"image_size",image_size},{"timestamp",timestamp},{"pdb_name",pdb_name},{"pdb_key",pdb_key},{"pdb_guid",utf8(guid)},{"pdb_age",pdb_age}};}

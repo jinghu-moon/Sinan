@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 128 128">
+<defs>
+<linearGradient id="pL" x1="0" y1="6.000" x2="0" y2="122.000" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#FFFFFF"/><stop offset="1" stop-color="#E8E9ED"/></linearGradient>
+<linearGradient id="rg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F2F3F5"/><stop offset="1" stop-color="#B2B3B9"/></linearGradient>
+<linearGradient id="fA" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#64656C"/><stop offset="1" stop-color="#393A3F"/></linearGradient>
+<linearGradient id="fB" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3B3C41"/><stop offset="1" stop-color="#0D0D10"/></linearGradient>
+<clipPath id="cL"><rect x="-40" y="-50" width="40.3" height="100"/></clipPath>
+<clipPath id="cR"><rect x="0" y="-50" width="40" height="100"/></clipPath>
+</defs>
+<rect x="6.000" y="6.000" width="116.000" height="116.000" rx="29.998" fill="url(#pL)"/>
+<rect x="6.500" y="6.500" width="115.000" height="115.000" rx="29.498" fill="none" stroke="#fff" stroke-opacity=".9"/><rect x="6.000" y="6.000" width="116.000" height="116.000" rx="29.998" fill="none" stroke="#000" stroke-opacity=".10"/>
+<path d="M107.83 60.17A44 44 0 1 1 67.83 20.17" fill="none" stroke="url(#rg)" stroke-width="9.000" stroke-linecap="round"/>
+<circle cx="95.11" cy="32.89" r="6.000" fill="#26262A"/>
+<g transform="translate(65.033 62.967) rotate(45) scale(0.85)">
+<polygon points="-22,24 0,-32 0,12" fill="url(#fA)" stroke="url(#fA)" stroke-width="5" stroke-linejoin="round" clip-path="url(#cL)"/>
+<polygon points="0,-32 22,24 0,12" fill="url(#fB)" stroke="url(#fB)" stroke-width="5" stroke-linejoin="round" clip-path="url(#cR)"/>
+</g>
+</svg>

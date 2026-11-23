@@ -3,6 +3,38 @@
 // Public interfaces from Microsoft.UI.Xaml.winmd. ABI prefixes include every
 // method preceding the methods used here. QI failure disables only that style.
 namespace sinan::style {
+struct Thickness {double left,top,right,bottom;};
+MIDL_INTERFACE("FE08F13D-DC6A-5495-AD44-C2D8D21863B0") IElementResources : public IInspectable {
+virtual HRESULT STDMETHODCALLTYPE get_Triggers(void**) = 0;
+            virtual HRESULT STDMETHODCALLTYPE get_Resources(IInspectable**) = 0;
+            virtual HRESULT STDMETHODCALLTYPE put_Resources(void*) = 0;
+            virtual HRESULT STDMETHODCALLTYPE get_Tag(void**) = 0;
+            virtual HRESULT STDMETHODCALLTYPE put_Tag(void*) = 0;
+            virtual HRESULT STDMETHODCALLTYPE get_Language(void**) = 0;
+            virtual HRESULT STDMETHODCALLTYPE put_Language(void*) = 0;
+            virtual HRESULT STDMETHODCALLTYPE get_ActualWidth(double*) = 0;
+            virtual HRESULT STDMETHODCALLTYPE get_ActualHeight(double*) = 0;
+            virtual HRESULT STDMETHODCALLTYPE get_Width(double*) = 0;
+            virtual HRESULT STDMETHODCALLTYPE put_Width(double) = 0;
+            virtual HRESULT STDMETHODCALLTYPE get_Height(double*) = 0;
+            virtual HRESULT STDMETHODCALLTYPE put_Height(double) = 0;
+            virtual HRESULT STDMETHODCALLTYPE get_MinWidth(double*) = 0;
+            virtual HRESULT STDMETHODCALLTYPE put_MinWidth(double) = 0;
+            virtual HRESULT STDMETHODCALLTYPE get_MaxWidth(double*) = 0;
+            virtual HRESULT STDMETHODCALLTYPE put_MaxWidth(double) = 0;
+            virtual HRESULT STDMETHODCALLTYPE get_MinHeight(double*) = 0;
+            virtual HRESULT STDMETHODCALLTYPE put_MinHeight(double) = 0;
+            virtual HRESULT STDMETHODCALLTYPE get_MaxHeight(double*) = 0;
+            virtual HRESULT STDMETHODCALLTYPE put_MaxHeight(double) = 0;
+            virtual HRESULT STDMETHODCALLTYPE get_HorizontalAlignment(int32_t*) = 0;
+            virtual HRESULT STDMETHODCALLTYPE put_HorizontalAlignment(int32_t) = 0;
+            virtual HRESULT STDMETHODCALLTYPE get_VerticalAlignment(int32_t*) = 0;
+            virtual HRESULT STDMETHODCALLTYPE put_VerticalAlignment(int32_t) = 0;
+            virtual HRESULT STDMETHODCALLTYPE get_Margin(Thickness*) = 0;
+            virtual HRESULT STDMETHODCALLTYPE put_Margin(Thickness) = 0;
+            virtual HRESULT STDMETHODCALLTYPE get_Name(void**) = 0;
+            };
+
 MIDL_INTERFACE("82A4CD9E-435E-5AEB-8C4F-300CECE45CAE") IXamlReader : public IInspectable {
     virtual HRESULT STDMETHODCALLTYPE Load(HSTRING,IInspectable**) = 0;
     virtual HRESULT STDMETHODCALLTYPE LoadWithInitialTemplateValidation(HSTRING,IInspectable**) = 0;

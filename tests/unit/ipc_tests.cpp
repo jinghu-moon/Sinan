@@ -41,6 +41,21 @@ int main() {
         auto root = fs::temp_directory_path() / (L"Sinan-ipc-test-" + std::to_wstring(GetCurrentProcessId()) + L"-" + std::to_wstring(GetTickCount64()));
         expect(agent_endpoint(root) == agent_endpoint(root / L"."), "equivalent roots share endpoint");
         expect(agent_endpoint(root) != agent_endpoint(root / L"other"), "different config roots isolated");
+        {
+            PipeServer pipe(root / L"wake");
+            Handle wake(CreateEventW(nullptr, FALSE, TRUE, nullptr));
+            const auto unexpected=[](const Json&) -> Json { throw std::runtime_error("unexpected request"); };
+            auto started=GetTickCount64();
+            expect(!pipe.poll(unexpected,5000,wake.get())&&GetTickCount64()-started<1000,"worker completion interrupts the pipe wait");
+            MSG message{};
+            PeekMessageW(&message,nullptr,0,0,PM_NOREMOVE);
+            constexpr UINT test_message=WM_APP+1;
+            expect(PostThreadMessageW(GetCurrentThreadId(),test_message,0,0)!=FALSE,"post STA test message");
+            started=GetTickCount64();
+            expect(!pipe.poll(unexpected,5000,wake.get())&&
+                PeekMessageW(&message,nullptr,test_message,test_message,PM_REMOVE)&&GetTickCount64()-started<1000,
+                "STA message interrupts the pipe wait and stays queued for dispatch");
+        }
         std::promise<void> ready;
         auto server = std::async(std::launch::async, [&] {
             PipeServer pipe(root);

@@ -42,6 +42,33 @@ Json by_id(const Json& all, const std::string& id) {
 int main() {
     try {
         Config config;
+        {
+            bool running=true;
+            ShellTabTracker history("closed-history",config,[&](DWORD,uint64_t){
+                return running?ProcessLifetime::running:ProcessLifetime::ended;
+            });
+            for (int i=0;i<21;++i) {
+                auto tab=observation(500+i);
+                tab.location.filesystem_path=L"D:\\History\\"+std::to_wstring(i);
+                tab.native_only=true;
+                history.reconcile({{tab},true,{},true});
+                history.reconcile({{},true,{}});
+                history.reconcile({{},true,{}});
+                expect(history.list().size()==1,"COM-only scans cannot retire a native-only tab");
+                history.reconcile({{},true,{},true});
+                expect(history.list().size()==1,"one authoritative absence does not retire the tab");
+                history.reconcile({{},true,{},true});
+            }
+            expect(history.closed_tabs().size()==20&&history.closed_tabs().front().path==L"D:\\History\\1"&&
+                history.closed_tabs().back().path==L"D:\\History\\20","history is capped and ordered by observed close");
+            history.forget_closed_tab(history.closed_tabs().back().sequence);
+            expect(history.closed_tabs().back().path==L"D:\\History\\19","confirmed reopen removes only its own entry");
+            history.reconcile({{observation(600)},true,{}});
+            history.reconcile({{},true,{}});
+            running=false;
+            history.reconcile({{},true,{}});
+            expect(history.list().empty()&&history.closed_tabs().size()==19,"Explorer exit does not record a tab close");
+        }
         ShellTabTracker tracker("tracker-test", config, assume_running);
         auto a = observation(101), b = observation(102), c = observation(103);
         ShellTabScan scan{{a, b, c}, true, {}};
@@ -79,6 +106,7 @@ int main() {
         rejects([&] { tracker.set_depth(aid, 2); }, "unobserved tab cannot be targeted");
         tracker.reconcile({{b, c}, true, {}});
         expect(tracker.list().size() == 2, "second complete absence retires tab");
+        expect(tracker.closed_tabs().empty(), "virtual locations are not saved as filesystem tabs");
         rejects([&] { tracker.reset_depth(aid); }, "retired token rejected");
         auto reused = observation(101); // Same HWND/path, new COM identity.
         tracker.reconcile({{reused, b, c}, true, {}});
@@ -93,6 +121,30 @@ int main() {
         expect(unresolved.at("path").is_null() && !unresolved.at("location_resolved").get<bool>(), "unresolved navigation clears stale path");
         expect(unresolved.at("warning").get<std::string>() == "busy", "location warning exposed");
         expect(unresolved.at("depth").get<std::string>() == "all", "unresolved path does not drop policy");
+        {
+            ShellTabTracker live("directory-target",config,assume_running);
+            auto first=observation(401),second=observation(402),third=observation(403),unmapped=observation(404);
+            const auto foreground=reinterpret_cast<HWND>(200);
+            for(auto* tab:{&first,&second,&third}) {
+                if(tab!=&first)tab->window=foreground;
+                tab->native=NativeTab{};
+                tab->native->window=tab->window;
+                tab->native->browser_window=tab->browser_window;
+            }
+            live.reconcile({{unmapped,first,second,third},true,{}});
+            const auto tabs=live.list();
+            const auto second_id=tabs[2].at("tab_id").get<std::string>();
+            auto chosen=live.directory_target(L"d:/a/b/c/",foreground);
+            expect(chosen.tab_id==second_id&&chosen.foreground_anchor&&chosen.foreground_anchor->browser_window==second.browser_window,"first verified match in the foreground window wins");
+            expect(live.directory_target(L"D:\\A\\B\\C",nullptr).tab_id==tabs[1].at("tab_id").get<std::string>(),"verified background match wins over unmapped match");
+            live.reconcile({{unmapped},false,{"race"}});
+            chosen=live.directory_target(L"D:\\A\\B\\C",foreground);
+            expect(chosen.tab_id==tabs[0].at("tab_id").get<std::string>()&&!chosen.foreground_anchor,"unobserved tabs are ignored and an unmapped match still prevents a duplicate open");
+            unmapped.location={std::nullopt,L""};unmapped.location_resolved=false;
+            live.reconcile({{unmapped},true,{}});
+            chosen=live.directory_target(L"D:\\A\\B\\C",foreground);
+            expect(chosen.tab_id.empty()&&!chosen.locations_resolved,"unknown tab location prevents treating a directory as absent");
+        }
         {
             Config rule_config;
             DirectoryRule source;source.id="source";source.patterns={L"D:\\A\\**\\src"};source.depth=3;

@@ -12,19 +12,27 @@
 #include <memory>
 
 namespace sinan {
-struct ShortcutEvent {std::string action;HWND window{};GUID expected_guid{};uint64_t process_started{};};
+struct ShortcutEvent {
+    std::string action;
+    HWND window{};
+    GUID expected_guid{};
+    uint64_t process_started{};
+    DWORD process_id{};
+    Shortcut chord{};
+};
+struct DirectoryShortcutEvent {Json entry;HWND window{};};
 class DirectoryShortcuts {
     HWND window_{};
-    std::map<int,std::string> ids_;
+    std::map<int,Json> ids_;
     Json config_,errors_=Json::object();
     uint64_t retry_{};
-    std::deque<ShortcutEvent> events_;
+    std::deque<DirectoryShortcutEvent> events_;
     static LRESULT CALLBACK procedure(HWND,UINT,WPARAM,LPARAM);
 public:
     DirectoryShortcuts();
     ~DirectoryShortcuts();
     void update(const Json& entries);
-    std::deque<ShortcutEvent> take();
+    std::deque<DirectoryShortcutEvent> take();
     Json status() const;
 };
 class ExplorerShortcuts {
@@ -40,29 +48,38 @@ private:
     std::array<Pending,17> pending_;
     std::atomic<size_t> head_{},tail_{};
     std::atomic<uint64_t> generation_{},dropped_{};
+    std::atomic<uint64_t> priority_rearms_{};
     std::atomic<bool> hooked_{};
     std::atomic<size_t> bound_{};
     std::atomic<DWORD> input_id_{};
-    Handle input_ready_,capture_ready_,stopping_;
+    std::optional<Handle> capture_ready_,stopping_;
+    Handle action_ready_;
     std::thread input_thread_,capture_thread_;
     SelectionReader read_selection_;
     ForegroundProbe foreground_;
     std::mutex command_mutex_,event_mutex_,error_mutex_;
     std::deque<std::function<void()>> commands_;
     std::deque<std::pair<uint64_t,ShortcutEvent>> events_;
-    std::string hook_error_;
-    Json config_,errors_=Json::object();
-    uint64_t retry_{};
+    std::string hook_error_,foreground_error_,timer_error_,capture_error_;
+    Json config_;
     HHOOK hook_{};
+    HWINEVENTHOOK foreground_hook_{};
+    UINT_PTR priority_timer_{};
+    HWND priority_window_{};
     std::shared_ptr<const Settings> settings_;
     std::shared_ptr<const Settings> published_;
     std::bitset<256> pressed_,consumed_;
     std::vector<Binding> bindings_;
+    void start_input();
     bool post_input(std::function<void()> command);
     void configure(std::shared_ptr<const Settings> settings);
+    void refresh_priority(bool periodic);
+    void install_keyboard_hook();
+    void detach_input_hooks();
     bool on_key(UINT key,bool down,UINT modifiers,HWND foreground);
     void capture();
     static LRESULT CALLBACK keyboard(int,WPARAM,LPARAM);
+    static void CALLBACK foreground_changed(HWINEVENTHOOK,DWORD,HWND,LONG,LONG,DWORD,DWORD);
     static thread_local ExplorerShortcuts* current_;
     friend struct ShortcutInputTestAccess;
 public:
@@ -70,6 +87,7 @@ public:
     ~ExplorerShortcuts();
     void update(const Json& config,const std::vector<NativeTab>& tabs,bool enabled);
     std::deque<ShortcutEvent> take();
+    HANDLE action_ready() const { return action_ready_.get(); }
     Json status();
 };
 class SystemNotifications {

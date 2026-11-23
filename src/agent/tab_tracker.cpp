@@ -1,5 +1,6 @@
 #include "agent/tab_tracker.hpp"
 #include "formatter/formatter.hpp"
+#include "policy/entries.hpp"
 #include <algorithm>
 #include <cstring>
 #include <limits>
@@ -63,18 +64,41 @@ void ShellTabTracker::reconcile(const ShellTabScan& scan) {
         }
         found->second.missing_scans = 0;
         found->second.observed = true;
+        found->second.native_only = tab.native_only;
+        if (tab.location_resolved) found->second.last_path = tab.location.filesystem_path;
         seen.insert(found->first);
     }
+    // A dead Explorer process retires its observations without recording tab closes.
+    prune_exited_processes();
     // A collection race alone must not destroy an override on a living process.
     if (scan.complete) {
+        std::vector<ClosedTab> closed;
         for (auto it = tracked_.begin(); it != tracked_.end();) {
-            if (!seen.contains(it->first) && ++it->second.missing_scans >= 2) {
-                registry_.close_tab(it->first); it = tracked_.erase(it);
-            } else ++it;
+            auto& tab = it->second;
+            if (seen.contains(it->first)||(tab.native_only&&!scan.native_inventory)) { ++it; continue; }
+            if (++tab.missing_scans == 1) {
+                tab.missing_sequence = ++close_sequence_;
+                ++it;
+                continue;
+            }
+            if (tab.last_path) {
+                const auto state = registry_.get(it->first);
+                closed.push_back({tab.missing_sequence,reinterpret_cast<HWND>(state.identity.frame_id),
+                    tab.process_id,tab.process_started,std::move(*tab.last_path)});
+            }
+            registry_.close_tab(it->first);
+            it = tracked_.erase(it);
+        }
+        for (auto& tab : closed) {
+            auto position = std::upper_bound(closed_tabs_.begin(),closed_tabs_.end(),tab.sequence,
+                [](uint64_t sequence,const ClosedTab& entry){return sequence<entry.sequence;});
+            closed_tabs_.insert(position,std::move(tab));
+            if (closed_tabs_.size()>20) closed_tabs_.pop_front();
         }
     }
-    // Process exit is independent evidence even when Shell COM enumeration is incomplete.
-    prune_exited_processes();
+}
+void ShellTabTracker::forget_closed_tab(uint64_t sequence) {
+    std::erase_if(closed_tabs_,[&](const auto& tab){return tab.sequence==sequence;});
 }
 void ShellTabTracker::apply_config(const Config& config) {
     validate_config(config);
@@ -89,6 +113,51 @@ std::vector<NativeTab> ShellTabTracker::native_tabs() const {
     std::vector<NativeTab> result;
     for(const auto& [id,tab]:tracked_)if(tab.observed&&tab.native)result.push_back(*tab.native);
     return result;
+}
+std::vector<NativeTab> ShellTabTracker::shortcut_windows() const {
+    if(tracked_.empty())return {};
+    auto result=native_selection_supported()?native_tabs():std::vector<NativeTab>{};
+    std::set<HWND> mapped;
+    for(const auto& tab:result)mapped.insert(tab.window);
+    for(const auto& [id,tab]:tracked_) {
+        if(!tab.observed)continue;
+        const auto frame=reinterpret_cast<HWND>(registry_.get(id).identity.frame_id);
+        if(!mapped.insert(frame).second)continue;
+        NativeTab window{};
+        window.window=frame;
+        window.process_id=tab.process_id;
+        window.process_started=tab.process_started;
+        result.push_back(window);
+    }
+    return result;
+}
+std::pair<HWND,HWND> ShellTabTracker::shell_target(std::string_view id) const {
+    const auto found=tracked_.find(id);
+    if(found==tracked_.end()||!found->second.observed)throw Error(2,"Tab closed or not observed");
+    const auto& tab=found->second;
+    return {reinterpret_cast<HWND>(registry_.get(id).identity.frame_id),tab.browser_window};
+}
+DirectoryTarget ShellTabTracker::directory_target(std::wstring_view path, HWND foreground, bool foreground_only) const {
+    DirectoryTarget target;
+    const auto key=directory_key(path);
+    int best=0;
+    for(const auto& [id,tab]:tracked_) {
+        if(!tab.observed)continue;
+        if(!tab.resolved)target.locations_resolved=false;
+        const bool in_foreground=tab.native&&tab.native->window==foreground;
+        if(in_foreground&&!target.foreground_anchor)target.foreground_anchor=tab.native;
+        if(foreground_only&&!in_foreground)continue;
+        const auto location=registry_.get(id).location.filesystem_path;
+        if(!tab.resolved||!location)continue;
+        try {if(directory_key(*location)!=key)continue;}
+        catch(const PolicyError&) {continue;}
+        const int priority=in_foreground?3:tab.native?2:1;
+        if(priority>best) {
+            best=priority;
+            target.tab_id=id;
+        }
+    }
+    return target;
 }
 Json ShellTabTracker::list() const {
     Json result = Json::array();

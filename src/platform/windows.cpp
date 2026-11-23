@@ -86,9 +86,9 @@ std::wstring quote_argument(std::wstring_view value) {
     out.append(slashes * 2, L'\\');
     return out + L'"';
 }
-std::wstring current_sid() {
+std::wstring process_user_sid(HANDLE process) {
     HANDLE raw = nullptr;
-    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &raw)) throw Error(4, system_error("查询用户身份"));
+    if (!OpenProcessToken(process, TOKEN_QUERY, &raw)) throw Error(4, system_error("查询用户身份"));
     Handle token(raw);
     DWORD size = 0; GetTokenInformation(token.get(), TokenUser, nullptr, 0, &size);
     std::vector<BYTE> bytes(size);

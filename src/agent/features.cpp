@@ -60,10 +60,39 @@ Json TabFeatures::change(ShellTabTracker& tracker,const Config& config,const Jso
     auto id=request.at("tab_id").get<std::string>();auto tab=tracker.native_tab(id);
     auto command=request.at("command").get<std::string>();
     if(command=="tabs.locate") {
+        auto same_window=[&]{
+            DWORD pid{};
+            return GetWindowThreadProcessId(tab.window,&pid)&&pid==tab.process_id;
+        };
         AllowSetForegroundWindow(tab.process_id);
-        auto report=request_feature(tab,FeatureAction::locate);
-        if(IsIconic(tab.window))ShowWindowAsync(tab.window,SW_RESTORE);
-        report["foreground_activated"]=SetForegroundWindow(tab.window)!=FALSE;return report;
+        auto payload=Json::object();
+        if(request.contains("expected_path"))payload["expected_path"]=request.at("expected_path");
+        auto report=request_feature(tab,FeatureAction::locate,payload);
+        const bool selected=report.value("active_known",false)&&report.value("active",false)&&!report.value("pending",false);
+        auto foreground=[&]{return GetForegroundWindow()==tab.window&&!IsIconic(tab.window)&&same_window();};
+        bool activated=false;
+        if(selected&&same_window()&&process_probe_(tab.process_id,tab.process_started)==ProcessLifetime::running) {
+            if(IsIconic(tab.window)) {
+                ShowWindowAsync(tab.window,SW_RESTORE);
+                const auto deadline=GetTickCount64()+300;
+                while(IsIconic(tab.window)&&same_window()&&GetTickCount64()<deadline)Sleep(10);
+            }
+            if(same_window()&&!IsIconic(tab.window)&&!foreground()) {
+                SetForegroundWindow(tab.window);
+                const auto deadline=GetTickCount64()+200;
+                while(!foreground()&&same_window()&&GetTickCount64()<deadline)Sleep(10);
+            }
+            activated=foreground();
+        }
+        report["tab_id"]=id;
+        report["selection_confirmed"]=selected;
+        report["foreground_activated"]=activated;
+        report["partial"]=!selected||!activated;
+        const bool en=config.language=="en";
+        report["message"]=!selected?(en?"Explorer did not confirm the selected tab.":"资源管理器尚未确认已选中标签。"):
+            !activated?(en?"Tab selected, but Explorer did not reach the foreground.":"标签已选中，资源管理器窗口未切到前台。"):
+            (en?"Tab selected and Explorer window activated.":"标签已选中，资源管理器窗口已切到前台。");
+        return report;
     }
     if(command=="tabs.visual-probe")return request_style(tab,StyleAction::inspect);
     if(command=="tabs.capabilities") {auto report=request_feature(tab,FeatureAction::inspect);try{auto appearance=request_style(tab,StyleAction::inspect);report["appearance"]=appearance;report["icon_applied"]=appearance.value("icon_applied",false);}catch(const std::exception& ex){report["appearance"]={{"error",ex.what()}};}return report;}
