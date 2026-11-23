@@ -9,6 +9,7 @@ Sinan (司南, formerly TabTail) is licensed under MIT. Dependency licenses rema
 | toml++ | 3.4.0 | MIT | https://github.com/marzer/tomlplusplus |
 | MinHook, including HDE64 | 1.3.4 | BSD-style; see LICENSE.txt for component notices | https://github.com/TsudaKageyu/minhook |
 | FTXUI | 7.0.3 | MIT | https://github.com/ArthurSonzogni/FTXUI |
+| Everything SDK3 | 3.0.1.12 | MIT | https://www.voidtools.com/forum/viewtopic.php?t=15853 |
 
 CMake pins downloaded archives by SHA-256. The vendored toml++ header and its original license are in `third_party/tomlplusplus`. Binary packages include original dependency license files. Windows SDK components are provided by Microsoft under their own terms.
 
