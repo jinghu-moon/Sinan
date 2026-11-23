@@ -1,10 +1,11 @@
 <script setup lang="ts">
-import { Button, Dialog, Input, Select, Switch } from 'tdesign-vue-next'
+import { Button, Dialog, Input, InputNumber, Select, Switch } from 'tdesign-vue-next'
+import { IconArrowDown, IconArrowUp, IconDownload, IconUpload } from '@tabler/icons-vue'
 import 'tdesign-vue-next/es/switch/style/index.css'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { onBeforeRouteLeave, useRoute } from 'vue-router'
 import { toast } from 'vue-sonner'
-import { closeSettings, hasSettingsHost, onSettingsClose, requestSettings, setCommandBarDraft, type CommandBarSettings, type CommandBarEntry, type CommandApplication } from '../settingsHost'
+import { closeSettings, hasSettingsHost, onSettingsClose, requestSettings, setCommandBarDraft, type CommandBarSettings, type CommandBarEntry, type CommandApplication, type CommandPosition } from '../settingsHost'
 
 const defaults = (): CommandBarSettings => ({
   enabled: false, terminal: true, hidden: [], icon_only: [], hidden_separators: [], templates: {},
@@ -69,6 +70,85 @@ const selectionKinds = [
 ]
 const referenceLabel = (entry: CommandBarEntry) => choices.value.find(item => item.value === entry.action)?.label
 const entryLabel = (entry: CommandBarEntry) => entry.label || referenceLabel(entry) || entry.action
+const sides = [{ value: 'left', label: '左栏' }, { value: 'right', label: '右栏' }]
+const standardOrder = ['new', 'cut', 'copy', 'paste', 'rename', 'share', 'delete', 'sort', 'view'] as const
+const separatorIds = ['after_new', 'after_delete', 'before_more'] as const
+const defaultCommandPositions = [
+  { id: 'terminal', label: '在此打开终端', order: 0 },
+  { id: 'menu', label: '司南菜单', order: 1 },
+  { id: 'context', label: 'Shell 上下文菜单', order: 2 },
+]
+const systemOrder = computed(() => [
+  ...(draft.value.system_order ?? []),
+  ...standardOrder.filter(item => !draft.value.system_order?.includes(item)),
+])
+function moveSystem(index: number, step: number) {
+  const order = [...systemOrder.value]
+  const item = order[index]
+  if (!item || !order[index + step]) return
+  order.splice(index, 1)
+  order.splice(index + step, 0, item)
+  draft.value.system_order = order
+}
+function moveSeparator(id: string, destination: unknown) {
+  const positions = { ...draft.value.separators }
+  if (typeof destination === 'string' && destination) positions[id] = destination
+  else delete positions[id]
+  draft.value.separators = positions
+}
+type LayoutEntry = { id: string; label: string; side: 'left' | 'right'; order: number; entry?: CommandBarEntry }
+const fixedLayout = computed<LayoutEntry[]>(() => [
+  ...defaultCommandPositions.map(item => {
+    const position = draft.value.positions?.[item.id]
+    return { ...item, side: position?.side ?? 'right', order: position?.order ?? item.order }
+  }),
+  ...entries.value.filter(entry => entry.placement === 'fixed').map((entry, index) => ({
+    id: entry.id, label: entryLabel(entry), side: entry.side ?? 'right', order: entry.order ?? 2 + index, entry,
+  } as LayoutEntry)),
+].sort((left, right) => left.order - right.order))
+function setPosition(item: LayoutEntry, position: CommandPosition) {
+  if (item.entry) Object.assign(item.entry, position)
+  else (draft.value.positions ??= {})[item.id] = position
+}
+function moveFixed(item: LayoutEntry, step: number) {
+  const items = fixedLayout.value.filter(entry => entry.side === item.side)
+  const index = items.indexOf(item)
+  if (index < 0 || !items[index + step]) return
+  items.splice(index, 1)
+  items.splice(index + step, 0, item)
+  items.forEach((entry, order) => setPosition(entry, { side: entry.side, order }))
+}
+function changeSide(item: LayoutEntry, side: unknown) {
+  if (side !== 'left' && side !== 'right') return
+  const destination = fixedLayout.value.filter(entry => entry.side === side && entry !== item)
+  destination.push(item)
+  destination.forEach((entry, order) => setPosition(entry, { side, order }))
+}
+async function transferConfiguration(importing: boolean) {
+  busy.value = true
+  try {
+    const { code, result } = await requestSettings(importing ? { action: 'command-bar.import', local: draft.value }
+      : { action: 'command-bar.export', settings: draft.value })
+    if (code) throw new Error(result.message)
+    if (importing && result.command_bar) {
+      draft.value = { ...result.command_bar, templates: result.command_bar.templates || {} }
+      selected.value = ''
+      toast.success('布局已导入草稿')
+    } else if (result.document) toast.success('命令栏设置已导出')
+  } catch (error) {
+    toast.error(importing ? '导入失败' : '导出失败', { description: error instanceof Error ? error.message : undefined })
+  } finally {
+    busy.value = false
+  }
+}
+const missingEntries = computed(() => entries.value.filter(entry => {
+  if (entry.action.startsWith('application.'))
+    return !configuredApps.value[entry.action.slice(12)]?.target
+  return !referenceLabel(entry)
+}))
+function reassignAction(entry: CommandBarEntry, value: unknown) {
+  if (typeof value === 'string' && choices.value.some(item => item.value === value)) entry.action = value
+}
 function insertEntry(action: string) {
   if (!action) return
   const id = crypto.randomUUID()
@@ -204,6 +284,12 @@ onMounted(async () => {
       </div>
       <div class="command-actions">
         <Button variant="outline" :disabled="!connected || busy || changed" @click="update()">刷新</Button>
+        <Button variant="outline" :disabled="!loaded || busy" @click="transferConfiguration(true)">
+          <template #icon><IconUpload :size="16" /></template>导入
+        </Button>
+        <Button variant="outline" :disabled="!loaded || busy" @click="transferConfiguration(false)">
+          <template #icon><IconDownload :size="16" /></template>导出
+        </Button>
         <Button variant="outline" :disabled="!loaded || busy" @click="draft = defaults()">恢复默认</Button>
         <Button theme="primary" :disabled="!loaded || !changed || busy" :loading="busy" @click="update(true)">保存</Button>
       </div>
@@ -213,6 +299,14 @@ onMounted(async () => {
       <label>启用命令栏定制 <Switch v-model="draft.enabled" aria-label="启用命令栏定制" :disabled="!loaded || busy" /></label>
       <label>在此打开终端 <Switch v-model="draft.terminal" aria-label="在此打开终端" :disabled="!loaded || busy" /></label>
       <label>新建文件快捷按钮 <Switch v-model="draft.new_file_button" :disabled="!loaded || busy" /></label>
+      <label>最近关闭 <Switch v-model="draft.recently_closed" :disabled="!loaded || busy" /></label>
+      <label>Shell 上下文菜单 <Switch v-model="draft.context_menu" :disabled="!loaded || busy" /></label>
+      <label>悬停打开菜单 <Switch :value="Boolean(draft.hover_delay)" :disabled="!loaded || busy"
+        @change="value => draft.hover_delay = value === true ? 400 : 0" /></label>
+    </div>
+    <p v-if="draft.context_menu" role="status">使用资源管理器原生菜单，支持 Shift 扩展命令。第三方扩展由 Windows 加载。</p>
+    <div v-if="draft.hover_delay" class="command-fields">
+      <label>悬停延时（毫秒） <InputNumber v-model="draft.hover_delay" :min="100" :max="2000" :step="50" /></label>
     </div>
     <div class="command-preview" aria-label="命令栏预览">
       <Button v-for="item in groups[0]?.items" :key="item" size="small" variant="text"
@@ -222,6 +316,30 @@ onMounted(async () => {
       </Button>
       <span v-if="draft.enabled && draft.terminal" class="terminal-preview">在此打开终端</span>
     </div>
+    <fieldset class="command-group" :disabled="!loaded || busy">
+      <legend>系统按钮布局</legend>
+      <div class="command-fields">
+        <label>按钮间距（像素） <InputNumber :value="draft.spacing ?? 0" :min="0" :max="16"
+          @change="value => draft.spacing = Number(value) || 0" /></label>
+        <label v-for="item in separatorIds" :key="item">{{ names[item] }}分隔线位置
+          <Select :value="draft.separators?.[item] ?? ''" :options="[
+            { label: '系统位置', value: '' },
+            ...standardOrder.map(id => ({ label: names[id] + '后', value: id })),
+          ]" @change="value => moveSeparator(item, value)" />
+        </label>
+      </div>
+      <div class="command-order">
+        <div v-for="(item, index) in systemOrder" :key="item" class="command-order-row">
+          <span>{{ names[item as keyof typeof names] }}</span>
+          <Button size="small" variant="text" :aria-label="'上移 ' + names[item as keyof typeof names]"
+            :disabled="index === 0" @click="moveSystem(index, -1)"><IconArrowUp :size="16" /></Button>
+          <Button size="small" variant="text" :aria-label="'下移 ' + names[item as keyof typeof names]"
+            :disabled="index === systemOrder.length - 1" @click="moveSystem(index, 1)"><IconArrowDown :size="16" /></Button>
+        </div>
+      </div>
+      <Button size="small" variant="outline" :disabled="!draft.system_order?.length"
+        @click="draft.system_order = []">恢复系统按钮顺序</Button>
+    </fieldset>
     <fieldset class="command-group" :disabled="!loaded || busy">
       <legend>从模板新建</legend>
       <div class="command-fields">
@@ -252,9 +370,30 @@ onMounted(async () => {
           {{ entryLabel(entry) }}
         </Button>
       </div>
+      <p v-if="missingEntries.length" role="status" class="command-error">
+        待重新关联的动作：{{ missingEntries.map(entryLabel).join('、') }}
+      </p>
+      <div class="command-fields">
+        <section v-for="side in sides" :key="side.value">
+          <h3>{{ side.label }}</h3>
+          <div class="command-order">
+            <div v-for="(item, index) in fixedLayout.filter(row => row.side === side.value)" :key="item.id" class="command-order-row">
+              <span>{{ item.label }}</span>
+              <Select :value="item.side" :options="sides" :aria-label="item.label + '所在栏'" @change="value => changeSide(item, value)" />
+              <Button size="small" variant="text" :aria-label="'上移 ' + item.label" :disabled="index === 0"
+                @click="moveFixed(item, -1)"><IconArrowUp :size="16" /></Button>
+              <Button size="small" variant="text" :aria-label="'下移 ' + item.label"
+                :disabled="index === fixedLayout.filter(row => row.side === side.value).length - 1"
+                @click="moveFixed(item, 1)"><IconArrowDown :size="16" /></Button>
+            </div>
+          </div>
+        </section>
+      </div>
       <template v-if="chosen">
-        <p v-if="!referenceLabel(chosen)" role="status">动作来源已删除</p>
+        <p v-if="missingEntries.includes(chosen)" role="status">动作来源缺失</p>
         <div class="command-fields">
+          <label>动作来源 <Select :value="chosen.action" filterable :options="choices"
+            @change="value => chosen && reassignAction(chosen, value)" /></label>
           <label>显示名称 <Input v-model="chosen.label" :placeholder="referenceLabel(chosen)" /></label>
           <label>位置 <Select v-model="chosen.placement" :options="placements" /></label>
           <label v-if="chosen.placement === 'menu'">子菜单 <Input v-model="chosen.group" placeholder="自定义动作" /></label>
@@ -326,6 +465,9 @@ fieldset.command-group { border: 1px solid var(--border); border-radius: 6px; pa
 .command-options label { display: flex; gap: 8px; align-items: center; justify-content: space-between; padding: 8px 10px; background: var(--surface-soft, #f3f6f5); border-radius: 6px; }
 .command-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; padding: 10px; border: 1px solid var(--border); border-radius: 6px; }
 .command-preview span { padding: 3px 6px; }
+.command-order { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 12px; }
+.command-order-row { display: flex; align-items: center; gap: 4px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; }
+.command-order-row :deep(.t-select__wrap) { width: 76px; }
 .terminal-preview { margin-left: auto; }
 .command-error { color: var(--warning); overflow-wrap: anywhere; }
 </style>

@@ -138,7 +138,15 @@ export type CommandBarSettings = {
   actions?: CommandBarEntry[]
   applications?: Record<string, CommandApplication>
   conditions?: Record<string, CommandSelectionRule>
+  system_order?: string[]
+  separators?: Record<string, string>
+  positions?: Record<string, CommandPosition>
+  spacing?: number
+  hover_delay?: number
+  recently_closed?: boolean
+  context_menu?: boolean
 }
+export type CommandPosition = { side?: 'left' | 'right'; order?: number }
 export type CommandTemplates = {
   directory?: string
   position?: 'menu' | 'beside' | 'replace' | 'off'
@@ -147,7 +155,7 @@ export type CommandTemplates = {
   hide_digits?: boolean
   variables?: boolean
 }
-export type CommandBarEntry = {
+export type CommandBarEntry = CommandPosition & {
   id: string
   action: string
   label?: string
@@ -166,6 +174,8 @@ export type SettingsRequest =
   | { action: 'settings.close' }
   | { action: 'command-bar.pick-path'; kind: 'directory' | 'application' | 'icon' }
   | { action: 'command-bar.save'; settings: CommandBarSettings; expected: CommandBarSettings }
+  | { action: 'command-bar.export'; settings: CommandBarSettings }
+  | { action: 'command-bar.import'; local: CommandBarSettings }
   | { action: 'command-bar.templates.preview'; templates: CommandTemplates }
   | { action: 'command-bar.arguments.preview'; source: string; directory: string; selection: { path: string; folder: boolean }[] }
   | { action: 'folder-sizes.set'; settings: FolderSizeSettings }
@@ -268,6 +278,7 @@ type Reply = {
     templates?: { label: string; filename: string }[]
     arguments?: string[]
     path?: string | null
+    document?: unknown
   }
   state?: GeneralState
   refresh_error?: string

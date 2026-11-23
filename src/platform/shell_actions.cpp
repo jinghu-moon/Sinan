@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cstring>
 #include <memory>
+#include <thread>
 #include <tlhelp32.h>
 #include <wincodec.h>
 
@@ -464,6 +465,60 @@ Json create_named_folder(const std::wstring& parent, const std::wstring& name) {
     return {{"created",true},{"path",utf8(path.wstring())}};
 }
 Json run_shell_view_action(IShellView& view, HWND frame, std::string_view action, const Json& parameters) {
+    if(action=="explorer.refresh_view") {
+        TabLocation location;
+        shell_view_location(view,location);
+        if(FAILED(view.Refresh()))throw Error(5,"Explorer could not refresh the tab");
+        return {{"refreshed",true},{"path",location.filesystem_path?Json(utf8(*location.filesystem_path)):Json(nullptr)}};
+    }
+    if(action=="explorer.folder_options") {
+        wchar_t system[MAX_PATH]{};
+        const auto size=GetSystemDirectoryW(system,MAX_PATH);
+        if(!size||size>=MAX_PATH)throw Error(5,"Windows system directory is unavailable");
+        const auto executable=fs::path(system)/L"control.exe";
+        if(reinterpret_cast<INT_PTR>(ShellExecuteW(frame,L"open",executable.c_str(),L"folders",nullptr,SW_SHOWNORMAL))<=32)
+            throw Error(5,"Windows could not open Folder Options");
+        return {{"launch_requested",true}};
+    }
+    if(action=="explorer.open_with") {
+        const auto paths=selected_paths(view);
+        if(paths.size()!=1)throw Error(3,"Select a single file to choose an application");
+        const auto attributes=GetFileAttributesW(paths.front().c_str());
+        if(attributes==INVALID_FILE_ATTRIBUTES||(attributes&FILE_ATTRIBUTE_DIRECTORY))
+            throw Error(3,"The selected item is not an available file");
+        const auto path=paths.front();
+        // The system chooser is modal. Its lifetime must not block Agent requests.
+        std::thread([path,frame] {
+            if(FAILED(CoInitializeEx(nullptr,COINIT_APARTMENTTHREADED)))return;
+            OPENASINFO open{path.c_str(),nullptr,OAIF_EXEC|OAIF_ALLOW_REGISTRATION};
+            SHOpenWithDialog(frame,&open);
+            CoUninitialize();
+        }).detach();
+        return {{"launch_requested",true},{"path",utf8(path)}};
+    }
+    if(action=="explorer.toggle_preview_pane"||action=="explorer.toggle_details_pane") {
+        HWND owner{};
+        if(GetForegroundWindow()!=frame||FAILED(view.GetWindow(&owner))||!owner||!IsWindowVisible(owner))
+            throw Error(3,"Bring the source Explorer tab to the foreground");
+        const bool details=action=="explorer.toggle_details_pane";
+        std::vector<INPUT> keys;
+        const auto key=[&](WORD code,DWORD flags=0) {
+            INPUT input{};
+            input.type=INPUT_KEYBOARD;
+            input.ki.wVk=code;
+            input.ki.dwFlags=flags;
+            keys.push_back(input);
+        };
+        key(VK_MENU);
+        if(details)key(VK_SHIFT);
+        key('P');key('P',KEYEVENTF_KEYUP);
+        if(details)key(VK_SHIFT,KEYEVENTF_KEYUP);
+        key(VK_MENU,KEYEVENTF_KEYUP);
+        const auto count=static_cast<UINT>(keys.size());
+        if(SendInput(count,keys.data(),sizeof(INPUT))!=count)
+            throw Error(5,"Explorer did not receive the pane shortcut");
+        return {{"toggle_requested",true}};
+    }
     if(action=="explorer.copy_selection")return copy_items(selected_paths(view));
     if(action=="explorer.copy_names")return copy_items(selected_names(view));
     if(action=="explorer.copy_path") {

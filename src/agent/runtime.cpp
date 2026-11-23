@@ -49,6 +49,7 @@ int run_observer_agent(const fs::path& root,bool from_login) {
     LayoutTracker layouts;
     std::map<std::pair<DWORD,DWORD>,NativeTab> command_bar_targets;
     Json command_bar_state={{"state","disabled"}};
+    std::optional<double> command_bar_menu_ms;
     Json command_bar_actions=Json::array();
     const auto command_bar_message=RegisterWindowMessageW(command_bar_wake_message);
     const auto agent_thread=GetCurrentThreadId();
@@ -220,6 +221,7 @@ int run_observer_agent(const fs::path& root,bool from_login) {
         tray.update(true,{chinese_ui(),active,runtime_applied(),config.autostart,tui_available,native_build_supported()});
     };
     auto synchronize_command_bar=[&](bool enabled) {
+        const auto started=std::chrono::steady_clock::now();
         std::map<std::pair<DWORD,DWORD>,NativeTab> observed;
         for(const auto& tab:tracker.shortcut_windows()) {
             const auto thread=GetWindowThreadProcessId(tab.window,nullptr);
@@ -258,6 +260,10 @@ int run_observer_agent(const fs::path& root,bool from_login) {
         if(!enabled)for(const auto& [key,tab]:command_bar_targets)if(!observed.contains(key))++pending;
         command_bar_state={{"state",!errors.empty()?"unavailable":pending?"pending":
             !enabled?"disabled":applied?"applied":"waiting"},{"errors",std::move(errors)},{"applied_threads",applied}};
+        if(enabled||applied||pending)
+            command_bar_state["refresh_ms"]=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();
+        if(enabled&&command_bar_menu_ms)command_bar_state["menu_ms"]=*command_bar_menu_ms;
+        if(!enabled)command_bar_menu_ms.reset();
     };
     auto synchronize=[&](bool restore_search=false) {
         feature_state=features.synchronize(tracker,config,active);
@@ -544,13 +550,18 @@ int run_observer_agent(const fs::path& root,bool from_login) {
         }
         if (GetTickCount64()>=reopen_pending->deadline) reopen_pending.reset();
     };
-    auto reopen=[&](HWND foreground,HWND explicit_window)->Json {
+    auto reopen=[&](HWND foreground,HWND explicit_window,std::optional<uint64_t> sequence={})->Json {
         scan();
         confirm_reopen();
         if (reopen_pending)return {{"opened",false},{"pending",true},{"confirmation","awaiting_observation"}};
         if (scan_complete)scan();
         if (tracker.closed_tabs().empty())throw Error(3,"No recently closed directory tab was observed");
-        const auto entry=tracker.closed_tabs().back();
+        const auto& history=tracker.closed_tabs();
+        const auto record=sequence?std::find_if(history.begin(),history.end(),[&](const auto& entry) {
+            return entry.sequence==*sequence;
+        }):std::prev(history.end());
+        if(record==history.end())throw Error(3,"The closed tab is no longer in history");
+        const auto entry=*record;
         if (!workspace_directory_available(entry.path))throw Error(3,"Recently closed directory is unavailable");
         const auto native=tracker.native_tabs();
         auto anchor=std::find_if(native.begin(),native.end(),[&](const auto& tab) {
@@ -655,7 +666,9 @@ int run_observer_agent(const fs::path& root,bool from_login) {
                 if(!reopening&&!merging&&!parent_tab&&!new_file&&!transfer&&!extract&&
                     action!="explorer.open_terminal"&&action!="explorer.open_terminal_smart"&&
                     action!="explorer.copy_directory"&&action!="explorer.copy_selection"&&action!="explorer.copy_names"&&
-                    action!="explorer.copy_path"&&action!="explorer.new_folder"&&action!="explorer.search_everything")
+                    action!="explorer.copy_path"&&action!="explorer.new_folder"&&action!="explorer.search_everything"&&
+                    action!="explorer.toggle_preview_pane"&&action!="explorer.toggle_details_pane"&&
+                    action!="explorer.open_with"&&action!="explorer.refresh_view"&&action!="explorer.folder_options")
                     throw Error(2,"Unknown Explorer action");
                 HWND frame=foreground, child=exact_child;
                 const bool explicit_tab=request.contains("tab_id");
@@ -870,6 +883,18 @@ int run_observer_agent(const fs::path& root,bool from_login) {
         toggle("tabs.lock","locked","锁定目录","解锁目录","Lock directory","Unlock directory");
         row(items,"explorer.merge_duplicate_tabs",title("合并重复标签","Merge duplicate tabs"),native);
         group(title("标签","Tabs"),std::exchange(items,Json::array()));
+        if(config.command_bar.recently_closed) {
+            const auto& history=tracker.closed_tabs();
+            for(auto entry=history.rbegin();entry!=history.rend()&&items.size()<15;++entry) {
+                auto label=fs::path(entry->path).filename().wstring();
+                if(label.empty())label=entry->path;
+                row(items,"closed."+std::to_string(entry->sequence),utf8(label),native,
+                    {{"sequence",entry->sequence}});
+                items.back()["tooltip"]=utf8(entry->path);
+            }
+            if(items.empty())row(items,"closed.empty",title("没有关闭记录","No closed tabs"),false);
+            group(title("最近关闭","Recently closed"),std::exchange(items,Json::array()));
+        }
 
         row(items,"explorer.new_file",title("新建文件","New file"),filesystem&&has_panel());
         row(items,"explorer.new_folder",title("新建文件夹","New folder"),filesystem);
@@ -950,6 +975,12 @@ int run_observer_agent(const fs::path& root,bool from_login) {
                 terminal=title("在此打开终端 · ","Open terminal · ")+utf8(fs::path(paths.front()).filename().wstring());
             else if(!location.empty())terminal+=" · "+location;
             row(optional,"explorer.open_terminal_smart",std::move(terminal),filesystem&&menu.paths.has_value(),{{"paths",true}});
+            row(optional,"explorer.toggle_preview_pane",title("预览窗格","Preview pane"));
+            row(optional,"explorer.toggle_details_pane",title("详细信息窗格","Details pane"));
+            row(optional,"explorer.open_with",title("打开方式","Open with"),
+                count==1&&attributes!=INVALID_FILE_ATTRIBUTES&&(attributes&FILE_ATTRIBUTE_DIRECTORY)==0,{{"paths",true}});
+            row(optional,"explorer.refresh_view",title("刷新当前视图","Refresh current view"));
+            row(optional,"explorer.folder_options",title("文件夹选项","Folder options"));
         }
         std::vector<std::pair<std::string,Json>> custom_groups;
         for(const auto& entry:config.command_bar.actions) {
@@ -1003,6 +1034,7 @@ int run_observer_agent(const fs::path& root,bool from_login) {
             const bool dynamic=entry.value("dynamic",false);
             Json row={{"action",action},{"label",entry.value("label",id)},{"enabled",false},
                 {"dynamic",dynamic},
+                {"side",entry.value("side",std::string("right"))},{"order",entry.value("order",2+static_cast<int>(rows.size()))},
                 {"icon_light",entry.value("icon_light",std::string{})},{"icon_dark",entry.value("icon_dark",std::string{})}};
             apply_action_icons(row,id,entry);
             if(menu)if(const auto found=menu->rows_by_action.find(action);found!=menu->rows_by_action.end()) {
@@ -1443,12 +1475,15 @@ int run_observer_agent(const fs::path& root,bool from_login) {
                 continue;
             }
             if(action=="menu"||action=="templates") {
+                const auto started=std::chrono::steady_clock::now();
                 scan();
                 auto menu=read_command_menu(frame,child,generation,action=="templates");
                 menu.selection_revision=selection_summary.selection_revision(frame);
                 send_layout_payload(command_target(frame),LayoutAction::command_bar_menu,{},
                     {{"generation",generation},{"child",reinterpret_cast<uintptr_t>(child)},{"rows",menu.rows}});
                 open_command_menu=std::move(menu);
+                command_bar_menu_ms=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();
+                command_bar_state["menu_ms"]=*command_bar_menu_ms;
                 continue;
             }
             const bool fixed=action.starts_with("fixed.");
@@ -1506,8 +1541,10 @@ int run_observer_agent(const fs::path& root,bool from_login) {
                 config=store.update([&](Config& c){c.everything_search_all_drives=all_drives;});
                 synchronize_search(config.everything_search);
                 last_action={{"action",action},{"result",{{"all_drives",all_drives}}}};
-            } else if(action=="explorer.reopen_closed_tab") {
-                auto result=reopen(frame,frame);
+            } else if(action=="explorer.reopen_closed_tab"||action.starts_with("closed.")) {
+                const auto sequence=action.starts_with("closed.")?
+                    std::optional(command->second.at("sequence").get<uint64_t>()):std::nullopt;
+                auto result=reopen(frame,frame,sequence);
                 last_action={{"action",action},{"result",std::move(result)}};
             } else {
                 run_action({{"command",action}},frame,child);

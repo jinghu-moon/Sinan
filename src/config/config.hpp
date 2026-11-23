@@ -22,6 +22,7 @@ inline constexpr std::string_view command_bar_buttons[]{"new", "cut", "copy", "p
     "sort", "view", "more", "details", "extract_all", "set_background", "rotate_left", "rotate_right"};
 inline constexpr std::string_view command_bar_labels[]{"new", "sort", "view", "details"};
 inline constexpr std::string_view command_bar_separators[]{"after_new", "after_delete", "before_more"};
+inline constexpr std::string_view command_bar_orderable[]{"new", "cut", "copy", "paste", "rename", "share", "delete", "sort", "view"};
 struct CommandBarSettings {
     bool enabled = false;
     bool terminal = true;
@@ -33,6 +34,13 @@ struct CommandBarSettings {
     Json actions=Json::array();
     Json applications=Json::object();
     bool new_file_button=false;
+    std::vector<std::string> system_order;
+    Json separators=Json::object();
+    Json positions=Json::object();
+    int spacing=0;
+    int hover_delay=0;
+    bool recently_closed=false;
+    bool context_menu=false;
     bool operator==(const CommandBarSettings&) const = default;
 };
 

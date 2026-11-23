@@ -32,17 +32,26 @@ Json run_settings_request(const fs::path& root, const Json& request) {
 }
 
 std::optional<std::wstring> pick_command_path(HWND owner,std::string_view kind) {
-    ComPtr<IFileOpenDialog> dialog;
-    if(FAILED(CoCreateInstance(CLSID_FileOpenDialog,nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&dialog))))
+    const bool exporting=kind=="export";
+    ComPtr<IFileDialog> dialog;
+    if(FAILED(CoCreateInstance(exporting?CLSID_FileSaveDialog:CLSID_FileOpenDialog,
+        nullptr,CLSCTX_INPROC_SERVER,IID_PPV_ARGS(&dialog))))
         throw Error(5,"无法打开文件选择器");
     FILEOPENDIALOGOPTIONS options{};
     if(FAILED(dialog->GetOptions(&options))||
-        FAILED(dialog->SetOptions(options|FOS_FORCEFILESYSTEM|(kind=="directory"?FOS_PICKFOLDERS:FOS_FILEMUSTEXIST))))
+        FAILED(dialog->SetOptions(options|FOS_FORCEFILESYSTEM|
+            (exporting?FOS_OVERWRITEPROMPT:kind=="directory"?FOS_PICKFOLDERS:FOS_FILEMUSTEXIST))))
         throw Error(5,"无法设置文件选择器");
     const COMDLG_FILTERSPEC applications[]={{L"应用程序",L"*.exe;*.lnk"},{L"所有文件",L"*.*"}};
     const COMDLG_FILTERSPEC images[]={{L"图片",L"*.png;*.ico;*.svg;*.bmp;*.jpg;*.jpeg"},{L"所有文件",L"*.*"}};
+    const COMDLG_FILTERSPEC configurations[]={{L"司南命令栏配置",L"*.json"}};
     if(kind=="application")dialog->SetFileTypes(static_cast<UINT>(std::size(applications)),applications);
     if(kind=="icon")dialog->SetFileTypes(static_cast<UINT>(std::size(images)),images);
+    if(exporting||kind=="import")dialog->SetFileTypes(static_cast<UINT>(std::size(configurations)),configurations);
+    if(exporting) {
+        dialog->SetFileName(L"sinan-command-bar.json");
+        dialog->SetDefaultExtension(L"json");
+    }
     const auto result=dialog->Show(owner);
     if(result==HRESULT_FROM_WIN32(ERROR_CANCELLED))return std::nullopt;
     if(FAILED(result))throw Error(5,"文件选择器未能完成操作");
@@ -211,6 +220,28 @@ private:
             if(action=="settings.close") {
                 command_bar_dirty_=false;
                 PostMessageW(window_,WM_CLOSE,0,0);
+                return S_OK;
+            }
+            if(action=="command-bar.export"||action=="command-bar.import") {
+                const bool importing=action=="command-bar.import";
+                Json reply{{"id",id},{"code",0},{"result",Json::object()}};
+                try {
+                    if(const auto path=pick_command_path(window_,importing?"import":"export")) {
+                        if(importing) {
+                            if(fs::file_size(*path)>65536)throw Error(2,"命令栏配置文件超过 64 KiB。");
+                            reply=run_settings_request(data_root_,{{"action",action},{"local",incoming.at("local")},
+                                {"document",Json::parse(read_file(*path))}});
+                        } else {
+                            reply=run_settings_request(data_root_,{{"action",action},{"settings",incoming.at("settings")}});
+                            if(reply.at("code")==0)
+                                atomic_write(*path,reply.at("result").at("document").dump(2)+"\n");
+                        }
+                        reply["id"]=id;
+                    }
+                }catch(const std::exception& error) {
+                    reply={{"id",id},{"code",2},{"result",{{"message",error.what()}}}};
+                }
+                post_reply(reply);
                 return S_OK;
             }
             if(action=="command-bar.pick-path") {

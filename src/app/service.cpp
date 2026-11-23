@@ -135,6 +135,36 @@ static Json application_action_impl(const fs::path& root,const Json& request) {
             arguments.push_back(utf8(quote_argument(argument)));
         return response({{"arguments",std::move(arguments)}});
     }
+    if(action=="command-bar.export"||action=="command-bar.import") {
+        const bool importing=action=="command-bar.import";
+        const auto document=importing?request.at("document"):Json{{"format","sinan.command-bar"},{"version",1},
+            {"settings",request.at("settings")}};
+        if(document.value("format",std::string{})!="sinan.command-bar"||document.value("version",0)!=1)
+            throw Error(2,"不支持的命令栏配置文件格式。");
+        auto settings=command_bar_from_json(document.at("settings"));
+        settings.templates.erase("directory");
+        for(auto& item:settings.actions) {
+            item.erase("icon_light");
+            item.erase("icon_dark");
+        }
+        auto local=importing?command_bar_from_json(request.at("local")):CommandBarSettings{};
+        for(auto& [id,app]:settings.applications.items()) {
+            const auto existing=local.applications.find(id);
+            app["target"]=existing==local.applications.end()?Json(""):existing->at("target");
+        }
+        if(importing) {
+            if(local.templates.contains("directory"))settings.templates["directory"]=local.templates.at("directory");
+            for(auto& item:settings.actions) {
+                const auto existing=std::find_if(local.actions.begin(),local.actions.end(),[&](const auto& candidate) {
+                    return candidate.at("id")==item.at("id")&&candidate.at("action")==item.at("action");
+                });
+                if(existing!=local.actions.end())for(const auto* icon:{"icon_light","icon_dark"})
+                    if(existing->contains(icon))item[icon]=existing->at(icon);
+            }
+            return response({{"command_bar",command_bar_json(command_bar_from_json(command_bar_json(settings)))}});
+        }
+        return response({{"document",{{"format","sinan.command-bar"},{"version",1},{"settings",command_bar_json(settings)}}}});
+    }
     if(action=="command-bar.save") {
         const auto settings=command_bar_from_json(request.at("settings"));
         const auto expected=command_bar_from_json(request.at("expected"));

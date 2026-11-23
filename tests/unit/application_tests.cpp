@@ -38,6 +38,27 @@ try{
      "Command bar matches extensions case insensitively");
  expect(command_bar_from_json(command_bar_json(command_bar))==command_bar,"Command bar selection rule round trip");
  rejects([]{command_bar_from_json({{"conditions",{{"explorer.copy_names",{{"count","unknown"}}}}}});});
+ const Json local_bar={{"enabled",true},{"hover_delay",400},{"spacing",4},{"recently_closed",true},
+     {"system_order",{"view","new"}},{"separators",{{"after_new","copy"}}},
+     {"positions",{{"menu",{{"side","left"},{"order",1}}}}},
+     {"templates",{{"directory","D:\\Templates"},{"position","beside"}}},
+     {"actions",Json::array({{{"id","app"},{"action","application.sample"},{"placement","fixed"},
+         {"side","left"},{"order",0},{"icon_light","D:\\Icon.png"}}})},
+     {"applications",{{"sample",{{"name","Sample"},{"target","D:\\Apps\\Sample.exe"},{"source","all"}}}}}};
+ const auto exported=call({{"action","command-bar.export"},{"settings",local_bar}}).at("result").at("document");
+ const auto& portable=exported.at("settings");
+ expect(!portable.at("templates").contains("directory")&&!portable.at("actions")[0].contains("icon_light")&&
+     portable.at("applications").at("sample").at("target")=="","Command bar export strips local paths");
+ const auto round_trip=call({{"action","command-bar.import"},{"document",exported},{"local",local_bar}})
+     .at("result").at("command_bar");
+ expect(command_bar_from_json(round_trip)==command_bar_from_json(local_bar),
+     "Command bar import reuses local associations");
+ auto incompatible=exported;
+ incompatible["version"]=2;
+ rejects([&]{call({{"action","command-bar.import"},{"document",incompatible},{"local",Json::object()}});});
+ rejects([]{command_bar_from_json({{"system_order",{"view","more"}}});});
+ rejects([]{command_bar_from_json({{"hover_delay",50}});});
+ expect(!fs::exists(root),"Command bar import leaves the saved config untouched");
  auto listed=call({{"action","actions.list"},{"query","固定"}}).at("result");
  expect(listed.at("count").get<int>()>0,"Chinese action discovery");
  expect(!fs::exists(root),"Action discovery does not create state");

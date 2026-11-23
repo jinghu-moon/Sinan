@@ -67,11 +67,19 @@ Json command_bar_json(const CommandBarSettings& settings) {
     if(!settings.actions.empty())result["actions"]=settings.actions;
     if(!settings.applications.empty())result["applications"]=settings.applications;
     if(settings.new_file_button)result["new_file_button"]=true;
+    if(!settings.system_order.empty())result["system_order"]=settings.system_order;
+    if(!settings.separators.empty())result["separators"]=settings.separators;
+    if(!settings.positions.empty())result["positions"]=settings.positions;
+    if(settings.spacing)result["spacing"]=settings.spacing;
+    if(settings.hover_delay)result["hover_delay"]=settings.hover_delay;
+    if(settings.recently_closed)result["recently_closed"]=true;
+    if(settings.context_menu)result["context_menu"]=true;
     return result;
 }
 
 CommandBarSettings command_bar_from_json(const Json& value) {
-    keys(value,{"enabled","terminal","hidden","icon_only","hidden_separators","conditions","templates","new_file_button","actions","applications"});
+    keys(value,{"enabled","terminal","hidden","icon_only","hidden_separators","conditions","templates","new_file_button","actions","applications",
+        "system_order","separators","positions","spacing","hover_delay","recently_closed","context_menu"});
     CommandBarSettings settings;
     const auto read_list=[&](const char* key,const auto& allowed) {
         const auto items=value.value(key,std::vector<std::string>{});
@@ -91,6 +99,32 @@ CommandBarSettings command_bar_from_json(const Json& value) {
     settings.hidden=read_list("hidden",command_bar_buttons);
     settings.icon_only=read_list("icon_only",command_bar_labels);
     settings.hidden_separators=read_list("hidden_separators",command_bar_separators);
+    settings.system_order=read_list("system_order",command_bar_orderable);
+    settings.separators=value.value("separators",Json::object());
+    keys(settings.separators,{"after_new","after_delete","before_more"});
+    for(const auto& destination:settings.separators) {
+        const auto id=destination.get<std::string>();
+        if(std::find(std::begin(command_bar_orderable),std::end(command_bar_orderable),id)==std::end(command_bar_orderable))
+            throw Error(2,"Invalid command bar separator position");
+    }
+    settings.positions=value.value("positions",Json::object());
+    keys(settings.positions,{"terminal","menu","context"});
+    const auto validate_position=[&](const Json& position) {
+        const auto side=position.value("side",std::string("right"));
+        const auto order=position.value("order",0);
+        if((side!="left"&&side!="right")||order<0||order>50)
+            throw Error(2,"Invalid command bar position");
+    };
+    for(const auto& position:settings.positions) {
+        keys(position,{"side","order"});
+        validate_position(position);
+    }
+    settings.spacing=value.value("spacing",0);
+    settings.hover_delay=value.value("hover_delay",0);
+    if(settings.spacing<0||settings.spacing>16||(settings.hover_delay&&(settings.hover_delay<100||settings.hover_delay>2000)))
+        throw Error(2,"Invalid command bar spacing or hover delay");
+    settings.recently_closed=value.value("recently_closed",false);
+    settings.context_menu=value.value("context_menu",false);
     const auto conditions=value.value("conditions",Json::object());
     if(!conditions.is_object()||conditions.size()>100)throw Error(2,"Invalid command bar selection conditions");
     for(const auto& [action,rule]:conditions.items()) {
@@ -127,7 +161,8 @@ CommandBarSettings command_bar_from_json(const Json& value) {
     if(!settings.actions.is_array()||settings.actions.size()>48)throw Error(2,"Expected up to 48 command bar entries");
     std::set<std::string> identifiers;
     for(auto& item:settings.actions) {
-        keys(item,{"id","action","label","group","placement","dynamic","icon_light","icon_dark"});
+        keys(item,{"id","action","label","group","placement","dynamic","icon_light","icon_dark","side","order"});
+        validate_position(item);
         for(const auto field:{"id","action"}) {
             const auto key=item.at(field).get<std::string>();
             if(key.empty()||key.size()>120||key.find_first_not_of("abcdefghijklmnopqrstuvwxyz0123456789-_.")!=key.npos)

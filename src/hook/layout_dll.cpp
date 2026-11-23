@@ -116,17 +116,20 @@ struct CommandBar {
     EventRegistrationToken terminal_click{};
     ComPtr<IWeakReference> menu;
     EventRegistrationToken menu_click{};
+    EventRegistrationToken menu_enter{},menu_exit{},templates_enter{},templates_exit{};
     struct Button {
         ComPtr<IWeakReference> item;
         EventRegistrationToken click{};
         std::wstring icon;
         bool show_label{};
     };
-    Button new_file,templates;
+    Button new_file,templates,context;
     std::map<std::string,Button,std::less<>> fixed;
     ComPtr<IInspectable> open_menu;
     std::vector<Element> customized;
     std::vector<ComPtr<IWeakReference>> added_tooltips;
+    std::vector<ComPtr<IWeakReference>> original_order;
+    std::map<std::string,ComPtr<IWeakReference>,std::less<>> separators;
     std::optional<CommandBarSettings> applied_settings;
     bool attached = true;
 };
@@ -142,6 +145,7 @@ thread_local HWND command_bar_window = nullptr;
 thread_local DWORD command_bar_agent_thread=0;
 thread_local uint64_t command_bar_menu_request=0;
 thread_local ComPtr<IWeakReference> command_bar_menu_anchor;
+thread_local bool command_bar_menu_in_overflow=false;
 thread_local Json command_bar_fixed=Json::array();
 thread_local Json pending_command_bar_actions=Json::array();
 // The pinned runtime uses the IInspectable identity pointer as its handle.
@@ -311,20 +315,108 @@ void queue_command_action(HWND window, HWND child, Json action) {
         reinterpret_cast<WPARAM>(window),0);
 }
 
+thread_local UINT_PTR command_hover_timer{};
+thread_local ComPtr<IWeakReference> command_hover_anchor;
+thread_local std::string command_hover_action;
+thread_local HWND command_hover_window{},command_hover_child{};
+
+void cancel_command_hover() {
+    if(command_hover_timer)KillTimer(nullptr,std::exchange(command_hover_timer,0));
+    command_hover_anchor.Reset();
+}
+
+void open_command_menu(HWND window,HWND child,IInspectable* sender,const std::string& action) {
+    if(!sender||window!=GetForegroundWindow()||!child)return;
+    command_bar_menu_anchor=weak_reference(sender);
+    command_bar_menu_in_overflow=false;
+    ComPtr<IXamlCommandBarElement> button;
+    if(SUCCEEDED(sender->QueryInterface(IID_PPV_ARGS(&button))))button->get_IsInOverflow(&command_bar_menu_in_overflow);
+    queue_command_action(window,child,{{"action",action},{"generation",++command_bar_menu_request}});
+}
+
+void CALLBACK open_on_hover(HWND,UINT,UINT_PTR,DWORD) {
+    try {
+        auto anchor=resolve_weak(command_hover_anchor);
+        cancel_command_hover();
+        if(command_hover_window==GetForegroundWindow()&&visible_browser(command_hover_window)==command_hover_child)
+            open_command_menu(command_hover_window,command_hover_child,anchor.Get(),command_hover_action);
+    }catch(...) {}
+}
+
+MIDL_INTERFACE("A48A71E1-8BB4-5597-9E31-903A3F6A04FB") IXamlPointerEventHandler : public IUnknown {
+    virtual HRESULT STDMETHODCALLTYPE Invoke(IInspectable*,IInspectable*) = 0;
+};
+
+class CommandHover final : public RuntimeClass<RuntimeClassFlags<Microsoft::WRL::ClassicCom>,IXamlPointerEventHandler> {
+public:
+    explicit CommandHover(std::string action):action_(std::move(action)) {}
+    HRESULT STDMETHODCALLTYPE Invoke(IInspectable* sender,IInspectable*) override {
+        try {
+            if(action_.empty()) {
+                if(resolve_weak(command_hover_anchor).Get()==sender)cancel_command_hover();
+                return S_OK;
+            }
+            if(!command_bar_settings||!command_bar_settings->hover_delay)return S_OK;
+            cancel_command_hover();
+            command_hover_window=GetForegroundWindow();
+            command_hover_child=visible_browser(command_hover_window);
+            if(!command_hover_child)return S_OK;
+            command_hover_anchor=weak_reference(sender);
+            command_hover_action=action_;
+            command_hover_timer=SetTimer(nullptr,0,static_cast<UINT>(command_bar_settings->hover_delay),open_on_hover);
+        }catch(...){return winrt::to_hresult();}
+        return S_OK;
+    }
+private:
+    std::string action_;
+};
+
+void command_hover(IInspectable* item,std::string action,EventRegistrationToken& enter,EventRegistrationToken& exit) {
+    ComPtr<IXamlElement> control;
+    winrt::check_hresult(item->QueryInterface(IID_PPV_ARGS(&control)));
+    if(action.empty()) {
+        if(enter.value)control->remove_PointerEntered(std::exchange(enter,{}));
+        if(exit.value)control->remove_PointerExited(std::exchange(exit,{}));
+        if(resolve_weak(command_hover_anchor).Get()==item)cancel_command_hover();
+    } else if(!enter.value) {
+        auto entered=Microsoft::WRL::Make<CommandHover>(std::move(action));
+        auto exited=Microsoft::WRL::Make<CommandHover>(std::string{});
+        if(!entered||!exited)winrt::throw_hresult(E_OUTOFMEMORY);
+        winrt::check_hresult(control->add_PointerEntered(entered.Get(),&enter));
+        winrt::check_hresult(control->add_PointerExited(exited.Get(),&exit));
+    }
+}
+
+struct FindVisibleShellView {
+    HWND window{};
+    static BOOL CALLBACK find(HWND candidate,LPARAM parameter) {
+        wchar_t name[32]{};
+        GetClassNameW(candidate,name,static_cast<int>(std::size(name)));
+        if(wcscmp(name,L"SHELLDLL_DefView")||!IsWindowVisible(candidate))return TRUE;
+        reinterpret_cast<FindVisibleShellView*>(parameter)->window=candidate;
+        return FALSE;
+    }
+};
+
 class CommandClick final : public RuntimeClass<RuntimeClassFlags<Microsoft::WRL::ClassicCom>,IXamlRoutedEventHandler> {
 public:
     explicit CommandClick(std::string action) : action_(std::move(action)) {}
     HRESULT STDMETHODCALLTYPE Invoke(IInspectable* sender,IInspectable*) override {
         try {
-            const auto window=GetAncestor(GetActiveWindow(),GA_ROOT);
+            const auto window=GetForegroundWindow();
+            if(!window||GetWindowThreadProcessId(window,nullptr)!=GetCurrentThreadId())return S_OK;
             const auto child=visible_browser(window);
-            Json event={{"action",action_}};
             if(action_=="menu"||action_=="templates") {
-                if(!sender)return S_OK;
-                command_bar_menu_anchor=weak_reference(sender);
-                event["generation"]=++command_bar_menu_request;
+                cancel_command_hover();
+                open_command_menu(window,child,sender,action_);
+            } else if(action_=="context") {
+                if(window!=GetForegroundWindow()||!child)return S_OK;
+                FindVisibleShellView view;
+                EnumChildWindows(child,FindVisibleShellView::find,reinterpret_cast<LPARAM>(&view));
+                if(view.window)PostMessageW(view.window,WM_CONTEXTMENU,reinterpret_cast<WPARAM>(view.window),-1);
+            } else {
+                queue_command_action(window,child,{{"action",action_}});
             }
-            queue_command_action(window,child,std::move(event));
         }catch(...){return winrt::to_hresult();}
         return S_OK;
     }
@@ -386,7 +478,8 @@ void render_menu_rows(std::wstring& markup,const Json& rows,bool light) {
         const auto title=wide(row.at("label").get<std::string>());
         const auto limit=IS_HIGH_SURROGATE(title.size()>50?title[50]:0)?50:51;
         const auto label=title.size()>54?title.substr(0,limit)+L"…":title;
-        const auto text=L" Text=\""+xaml_attribute(label)+L"\" ToolTipService.ToolTip=\""+xaml_attribute(title)+L"\"";
+        const auto tooltip=wide(row.value("tooltip",row.at("label").get<std::string>()));
+        const auto text=L" Text=\""+xaml_attribute(label)+L"\" ToolTipService.ToolTip=\""+xaml_attribute(tooltip)+L"\"";
         const auto state=row.value("enabled",true)?L"":L" IsEnabled=\"False\"";
         if(row.contains("children")) {
             markup+=L"<MenuFlyoutSubItem"+text+state+L">";
@@ -472,7 +565,7 @@ void refresh_menu_rows(IInspectable* items,const Json& rows) {
         auto tooltips=xaml_factory<style::IToolTipStatics>(L"Microsoft.UI.Xaml.Controls.ToolTipService");
         ComPtr<IInspectable> dependency;
         if(tooltips&&SUCCEEDED(item->QueryInterface(xaml_dependency_object,&dependency))) {
-            const auto tooltip=winrt::box_value(winrt::hstring(label));
+            const auto tooltip=winrt::box_value(winrt::hstring(wide(row.value("tooltip",utf8(label)))));
             winrt::check_hresult(tooltips->SetToolTip(dependency.Get(),winrt::get_abi(tooltip)));
         }
     }
@@ -532,7 +625,9 @@ bool show_command_menu(HWND window,const Json& request) {
         ComPtr<IXamlMenuFlyout> menu;
         ComPtr<style::IElementResources> anchor;
         winrt::check_hresult(flyout.As(&menu));
-        winrt::check_hresult(button.As(&anchor));
+        auto anchor_element=command_bar_menu_in_overflow?resolve_weak(record.element):button;
+        if(!anchor_element)throw Error(5,"Explorer command menu anchor is unavailable");
+        winrt::check_hresult(anchor_element.As(&anchor));
         winrt::check_hresult(menu->get_Items(&items));
         attach_menu_rows(items.Get(),rows,window,child,generation);
         refresh_menu_rows(items.Get(),rows);
@@ -664,6 +759,47 @@ ComPtr<IInspectable> new_probe_button(bool secondary, size_t slot) {
     return result;
 }
 
+using CommandItems=std::vector<ComPtr<IXamlCommandBarElement>>;
+
+CommandItems command_items(IXamlCommandVector& commands) {
+    uint32_t size=0;
+    winrt::check_hresult(commands.get_Size(&size));
+    CommandItems items(size);
+    for(uint32_t index=0;index<size;++index)winrt::check_hresult(commands.GetAt(index,&items[index]));
+    return items;
+}
+
+void move_command(IXamlCommandVector& commands,uint32_t from,uint32_t to,IXamlCommandBarElement* item) {
+    if(from==to)return;
+    winrt::check_hresult(commands.RemoveAt(from));
+    winrt::check_hresult(commands.InsertAt(to,item));
+}
+
+void order_added_commands(IXamlCommandVector& commands,std::vector<std::pair<int,ComPtr<IWeakReference>>> wanted) {
+    std::stable_sort(wanted.begin(),wanted.end(),[](const auto& left,const auto& right){return left.first<right.first;});
+    CommandItems selected;
+    for(const auto& [order,weak]:wanted) {
+        if(auto button=resolve_weak(weak)) {
+            ComPtr<IXamlCommandBarElement> item;
+            winrt::check_hresult(button.As(&item));
+            selected.push_back(std::move(item));
+        }
+    }
+    if(selected.empty())return;
+    const auto items=command_items(commands);
+    if(selected.size()>items.size())return;
+    auto slot=static_cast<uint32_t>(items.size()-selected.size());
+    if(std::equal(selected.begin(),selected.end(),items.begin()+slot,[](const auto& a,const auto& b){return a.Get()==b.Get();}))
+        return;
+    for(const auto& item:selected) {
+        uint32_t index=0,size=0;
+        bool present=false;
+        winrt::check_hresult(commands.IndexOf(item.Get(),&index,&present));
+        winrt::check_hresult(commands.get_Size(&size));
+        if(present)move_command(commands,index,size-1,item.Get());
+    }
+}
+
 Json refresh_command_bars(std::optional<bool> enabled, bool measure = false, bool inspect_items = false) {
     Json result = Json::array();
     for (auto& [handle, record] : command_bars) {
@@ -680,14 +816,35 @@ Json refresh_command_bars(std::optional<bool> enabled, bool measure = false, boo
         if(apply) {
             if(command_bar_settings||!record.customized.empty())apply_system_commands(record,bar.Get(),commands.Get(),*apply&&command_bar_settings.has_value());
             const bool configured=*apply&&command_bar_settings.has_value();
-            if(record.secondary&&(command_bar_settings||record.terminal||record.menu||!record.fixed.empty())) {
+            if(command_bar_settings||record.terminal||record.menu||record.context.item||!record.fixed.empty()) {
+                std::vector<std::pair<int,ComPtr<IWeakReference>>> ordered;
+                const auto place=[&](const char* key,int order) {
+                    if(!configured)return std::pair{false,order};
+                    const auto position=command_bar_settings->positions.value(key,Json::object());
+                    return std::pair{position.value("side",std::string("right"))==(record.secondary?"right":"left"),
+                        position.value("order",order)};
+                };
+                const auto [terminal_side,terminal_order]=place("terminal",0);
+                const auto [menu_side,menu_order]=place("menu",1);
+                const auto [context_side,context_order]=place("context",2);
+                if(auto item=resolve_weak(record.menu);item&&(!menu_side||!command_bar_settings->hover_delay))
+                    command_hover(item.Get(),{},record.menu_enter,record.menu_exit);
                 apply_command_button(record.terminal,record.terminal_click,*commands.Get(),
-                    configured&&command_bar_settings->terminal,"explorer.open_terminal",
+                    terminal_side&&command_bar_settings->terminal,"explorer.open_terminal",
                     command_bar_chinese?L"在此打开终端":L"Open terminal here",L"SinanOpenTerminal",L"&#xE756;",false);
-                apply_command_button(record.menu,record.menu_click,*commands.Get(),configured&&command_bar_agent_thread,"menu",
+                apply_command_button(record.menu,record.menu_click,*commands.Get(),menu_side&&command_bar_agent_thread,"menu",
                     command_bar_chinese?L"司南 ▾":L"Sinan ▾",L"SinanCommandMenu",L"&#xE8B7;",true,true);
+                apply_command_button(record.context.item,record.context.click,*commands.Get(),
+                    context_side&&command_bar_settings->context_menu,"context",
+                    command_bar_chinese?L"Shell 上下文菜单":L"Shell context menu",L"SinanContextMenu",L"&#xE8FD;",false,true);
+                ordered.emplace_back(terminal_order,record.terminal);
+                ordered.emplace_back(menu_order,record.menu);
+                ordered.emplace_back(context_order,record.context.item);
+                if(auto item=resolve_weak(record.menu);item&&command_bar_settings->hover_delay)
+                    command_hover(item.Get(),"menu",record.menu_enter,record.menu_exit);
                 std::set<std::string,std::less<>> wanted;
                 if(configured)for(const auto& row:command_bar_fixed) {
+                    if(row.value("side",std::string("right"))!=(record.secondary?"right":"left"))continue;
                     const auto action=row.at("action").get<std::string>();
                     wanted.insert(action);
                     auto& fixed=record.fixed[action];
@@ -702,34 +859,20 @@ Json refresh_command_bars(std::optional<bool> enabled, bool measure = false, boo
                         L"Sinan."+wide(action),L"&#xE713;",label,row.value("enabled",false),{},icon);
                     fixed.icon=std::move(icon);
                     fixed.show_label=label;
+                    ordered.emplace_back(row.value("order",3),fixed.item);
                 }
                 for(auto fixed=record.fixed.begin();fixed!=record.fixed.end();) {
                     if(wanted.contains(fixed->first)){++fixed;continue;}
                     apply_command_button(fixed->second.item,fixed->second.click,*commands.Get(),false,{},L"",L"",L"",false);
                     fixed=record.fixed.erase(fixed);
                 }
-                uint32_t size=0;
-                winrt::check_hresult(commands->get_Size(&size));
-                auto slot=size-static_cast<uint32_t>(record.fixed.size());
-                if(configured)for(const auto& row:command_bar_fixed) {
-                    auto& fixed=record.fixed.at(row.at("action").get<std::string>());
-                    auto item=resolve_weak(fixed.item);
-                    ComPtr<IXamlCommandBarElement> element;
-                    if(!item)continue;
-                    winrt::check_hresult(item.As(&element));
-                    uint32_t index=0;
-                    bool present=false;
-                    winrt::check_hresult(commands->IndexOf(element.Get(),&index,&present));
-                    if(present&&index!=slot) {
-                        winrt::check_hresult(commands->RemoveAt(index));
-                        winrt::check_hresult(commands->InsertAt(slot,element.Get()));
-                    }
-                    ++slot;
-                }
-                if(!configured)close_command_menu(record);
-            } else if(!record.secondary&&(command_bar_settings||record.templates.item||record.new_file.item)) {
+                order_added_commands(*commands.Get(),std::move(ordered));
+            }
+            if(!record.secondary&&(command_bar_settings||record.templates.item||record.new_file.item)) {
                 const auto position=configured?command_bar_settings->templates.value("position",std::string("menu")):std::string{};
                 const bool shortcut=position=="beside"||position=="replace";
+                if(auto item=resolve_weak(record.templates.item);item&&(!shortcut||!command_bar_settings->hover_delay))
+                    command_hover(item.Get(),{},record.templates_enter,record.templates_exit);
                 apply_command_button(record.templates.item,record.templates.click,*commands.Get(),shortcut,"templates",
                     command_bar_chinese?L"从模板新建 ▾":L"New from template ▾",L"SinanTemplates",L"&#xE8B7;",true,true,
                     position=="replace"?0u:1u);
@@ -737,8 +880,10 @@ Json refresh_command_bars(std::optional<bool> enabled, bool measure = false, boo
                     configured&&command_bar_settings->new_file_button,"explorer.new_file",
                     command_bar_chinese?L"新建文件":L"New file",L"SinanNewFile",L"&#xE7C3;",false,{},
                     shortcut&&position=="beside"?2u:1u);
-                if(!configured||!shortcut)close_command_menu(record);
+                if(auto item=resolve_weak(record.templates.item);item&&command_bar_settings->hover_delay)
+                    command_hover(item.Get(),"templates",record.templates_enter,record.templates_exit);
             }
+            if(!configured||(!record.menu&&!record.templates.item))close_command_menu(record);
         }
         ComPtr<IXamlCommandBar> control;
         int32_t more_visibility=0;
@@ -813,6 +958,7 @@ void CALLBACK restore_command_bar_timer(HWND, UINT, UINT_PTR id, DWORD) {
     command_bar_window=nullptr;
     command_bar_agent_thread=0;
     command_bar_menu_anchor.Reset();
+    cancel_command_hover();
     command_bar_fixed.clear();
     pending_command_bar_actions.clear();
 }
@@ -1068,7 +1214,10 @@ void restore_command_properties(CommandBar& record, Api& api) {
         if(!item)continue;
         Registered handle(item.Get(),api.diag.Get(),api.life.Get());
         for(const auto& [name,value]:entry.saved) {
-            if(value.local)set_command_property(item.Get(),name,value.original_enum);
+            if(value.local&&value.value) {
+                Registered original(value.value.Get(),api.diag.Get(),api.life.Get());
+                winrt::check_hresult(api.tree->SetProperty(handle.handle,original.handle,value.index));
+            } else if(value.local)set_command_property(item.Get(),name,value.original_enum);
             else winrt::check_hresult(api.tree->ClearProperty(handle.handle,value.index));
         }
         entry.saved.clear();
@@ -1096,15 +1245,102 @@ void ensure_command_tooltip(CommandBar& record, IInspectable* item) {
 }
 
 bool collapsed_visibility(std::wstring_view value);
+
+void update_command_order(IXamlCommandVector& commands,CommandItems current,const CommandItems& desired) {
+    for(uint32_t slot=0;slot<current.size();++slot) {
+        if(current[slot].Get()==desired[slot].Get())continue;
+        const auto item=std::find_if(current.begin()+slot,current.end(),[&](const auto& next) {
+            return next.Get()==desired[slot].Get();
+        });
+        if(item==current.end())winrt::throw_hresult(E_UNEXPECTED);
+        move_command(commands,static_cast<uint32_t>(item-current.begin()),slot,item->Get());
+        std::rotate(current.begin()+slot,item,item+1);
+    }
+}
+
+void restore_system_order(CommandBar& record,IXamlCommandVector& commands) {
+    if(record.original_order.empty())return;
+    const auto current=command_items(commands);
+    CommandItems original;
+    for(const auto& reference:record.original_order) {
+        ComPtr<IXamlCommandBarElement> element;
+        if(auto item=resolve_weak(reference);item&&SUCCEEDED(item.As(&element))) {
+            if(std::any_of(current.begin(),current.end(),[&](const auto& other){return element.Get()==other.Get();}))
+                original.push_back(std::move(element));
+        }
+    }
+    auto desired=current;
+    auto next=original.begin();
+    for(auto& item:desired)if(std::any_of(original.begin(),original.end(),[&](const auto& other){return item.Get()==other.Get();}))
+        item=*next++;
+    update_command_order(commands,current,desired);
+    record.original_order.clear();
+    record.separators.clear();
+}
+
+void apply_system_order(CommandBar& record,IXamlCommandVector& commands,const CommandBarSettings& settings) {
+    if(record.secondary||(settings.system_order.empty()&&settings.separators.empty()))return;
+    const auto current=command_items(commands);
+    if(record.original_order.empty()) {
+        std::string_view previous;
+        for(const auto& item:current) {
+            const auto id=automation_id(item.Get());
+            if(id.starts_with(L"Sinan"))continue;
+            record.original_order.push_back(weak_reference(item.Get()));
+            if(has_type(item.Get(),L"Microsoft.UI.Xaml.Controls.AppBarSeparator")) {
+                const auto type=previous=="new"?"after_new":previous=="delete"?"after_delete":"before_more";
+                record.separators[type]=weak_reference(item.Get());
+            } else previous=system_command_id(item.Get());
+        }
+    }
+    auto desired=current;
+    if(!settings.system_order.empty()) {
+        CommandItems system;
+        std::vector<uint32_t> slots;
+        const auto rank=[&](auto* item) {
+            const auto id=system_command_id(item);
+            return std::find(settings.system_order.begin(),settings.system_order.end(),id);
+        };
+        for(uint32_t index=0;index<current.size();++index) {
+            const auto id=system_command_id(current[index].Get());
+            if(std::find(std::begin(command_bar_orderable),std::end(command_bar_orderable),id)==std::end(command_bar_orderable))continue;
+            slots.push_back(index);
+            system.push_back(current[index]);
+        }
+        std::stable_sort(system.begin(),system.end(),[&](const auto& a,const auto& b){return rank(a.Get())<rank(b.Get());});
+        for(size_t index=0;index<slots.size();++index)desired[slots[index]]=system[index];
+    }
+    for(const auto& [id,destination]:settings.separators.items()) {
+        const auto reference=record.separators.find(id);
+        if(reference==record.separators.end())continue;
+        const auto separator=resolve_weak(reference->second);
+        ComPtr<IXamlCommandBarElement> element;
+        if(!separator||FAILED(separator.As(&element)))continue;
+        const auto from=std::find_if(desired.begin(),desired.end(),[&](const auto& item){return item.Get()==element.Get();});
+        const auto after=std::find_if(desired.begin(),desired.end(),[&](const auto& item){
+            return system_command_id(item.Get())==destination.get_ref<const std::string&>();
+        });
+        if(from==desired.end()||after==desired.end())continue;
+        if(from<after)std::rotate(from,from+1,after+1);
+        else std::rotate(after+1,from,from+1);
+    }
+    update_command_order(commands,current,desired);
+}
+
 void apply_system_commands(CommandBar& record,IInspectable* bar,IXamlCommandVector* commands,bool enabled) {
     Api api;
     if(!enabled) {
         restore_command_properties(record,api);
+        restore_system_order(record,*commands);
         return;
     }
     const auto& settings=*command_bar_settings;
-    if(record.applied_settings!=settings)restore_command_properties(record,api);
+    if(record.applied_settings!=settings) {
+        restore_command_properties(record,api);
+        restore_system_order(record,*commands);
+    }
     record.applied_settings=settings;
+    apply_system_order(record,*commands,settings);
     const auto contains=[](const auto& group,std::string_view id) {
         return !id.empty()&&std::find(group.begin(),group.end(),id)!=group.end();
     };
@@ -1118,7 +1354,7 @@ void apply_system_commands(CommandBar& record,IInspectable* bar,IXamlCommandVect
     if(!record.secondary&&contains(settings.hidden,"more"))
         customize_command_property(record,api,bar,L"OverflowButtonVisibility");
     const bool replace_new=!record.secondary&&settings.templates.value("position",std::string("menu"))=="replace";
-    if(!replace_new&&settings.hidden.empty()&&settings.icon_only.empty()&&settings.hidden_separators.empty())return;
+    if(!replace_new&&settings.hidden.empty()&&settings.icon_only.empty()&&settings.hidden_separators.empty()&&!settings.spacing)return;
     uint32_t size=0;
     winrt::check_hresult(commands->get_Size(&size));
     std::string_view previous;
@@ -1130,7 +1366,14 @@ void apply_system_commands(CommandBar& record,IInspectable* bar,IXamlCommandVect
         winrt::check_hresult(commands->GetAt(index,&item));
         if(has_type(item.Get(),L"Microsoft.UI.Xaml.Controls.AppBarSeparator")) {
             if(group_separator&&!group_visible)hide(group_separator.Get());
-            const auto id=previous=="new"?"after_new":previous=="delete"?"after_delete":"";
+            std::string_view id=previous=="new"?"after_new":previous=="delete"?"after_delete":"";
+            for(const auto& [name,reference]:record.separators) {
+                ComPtr<IXamlCommandBarElement> separator;
+                if(auto original=resolve_weak(reference);original&&SUCCEEDED(original.As(&separator))&&separator.Get()==item.Get()) {
+                    id=name;
+                    break;
+                }
+            }
             if(contains(settings.hidden_separators,id))hide(item.Get());
             trailing_separator=item;
             group_separator=item;
@@ -1138,6 +1381,28 @@ void apply_system_commands(CommandBar& record,IInspectable* bar,IXamlCommandVect
             continue;
         }
         previous=system_command_id(item.Get());
+        if(settings.spacing&&!previous.empty()) {
+            const auto found=std::find_if(record.customized.begin(),record.customized.end(),[&](const auto& element){
+                ComPtr<IXamlCommandBarElement> existing;
+                auto object=resolve(element);
+                return object&&SUCCEEDED(object.As(&existing))&&existing.Get()==item.Get()&&element.saved.contains(L"Margin");
+            });
+            if(found==record.customized.end()) {
+                ComPtr<style::IElementResources> control;
+                if(SUCCEEDED(item.As(&control))) {
+                    Element entry;
+                    entry.weak=weak_reference(item.Get());
+                    Registered handle(item.Get(),api.diag.Get(),api.life.Get());
+                    save_property(entry,api,handle.handle,L"Margin");
+                    style::Thickness margin{};
+                    winrt::check_hresult(control->get_Margin(&margin));
+                    margin.left+=settings.spacing/2.0;
+                    margin.right+=settings.spacing/2.0;
+                    winrt::check_hresult(control->put_Margin(margin));
+                    record.customized.push_back(std::move(entry));
+                }
+            }
+        }
         if(contains(settings.hidden,previous)||(replace_new&&previous=="new"))hide(item.Get());
         else if(group_separator) {
             Registered handle(item.Get(),api.diag.Get(),api.life.Get());
@@ -1264,6 +1529,11 @@ public:
                 std::erase_if(elements,[&](const auto& e){return e.id==element.Handle;});
                 navigation_roots.erase(element.Handle);
                 if(auto found=command_bars.find(element.Handle);found!=command_bars.end()) {
+                    if(command_hover_anchor) {
+                        const auto anchor=resolve_weak(command_hover_anchor);
+                        if(anchor.Get()==resolve_weak(found->second.menu).Get()||
+                           anchor.Get()==resolve_weak(found->second.templates.item).Get())cancel_command_hover();
+                    }
                     if(found->second.observed_commands)found->second.attached=false;
                     else command_bars.erase(found);
                 }
